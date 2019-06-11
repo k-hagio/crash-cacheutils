@@ -311,7 +311,7 @@ show_subdirs_info(ulong dentry)
 }
 
 static ulong
-get_mntpoint_dentry(char *path, char **remaining_path)
+get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 {
 	ulong pid, *mount_list;
 	int i, count;
@@ -321,9 +321,13 @@ get_mntpoint_dentry(char *path, char **remaining_path)
 	char buf[BUFSIZE], *bufp = buf;
 	ulong root, parent, mountp;
 
-	pid = 0;
-	while ((nscon = pid_to_context(pid)) == NULL)
-		pid++;
+	if (tc)
+		nscon = tc;
+	else {
+		pid = 0;
+		while ((nscon = pid_to_context(pid)) == NULL)
+			pid++;
+	}
 
 	mount_list = get_mount_list(&count, nscon);
 
@@ -409,13 +413,13 @@ bail_out:
 }
 
 static ulong
-path_to_dentry(char *path, ulong *inode)
+path_to_dentry(char *path, ulong *inode, struct task_context *tc)
 {
 	int i, count;
 	ulong *subdirs_list, root, d, dentry;
 	char *path_buf, *dentry_buf, *slash_pos, *path_start, *name;
 
-	root = get_mntpoint_dentry(path, &path_start);
+	root = get_mntpoint_dentry(path, &path_start, tc);
 	if (!root) {
 		error(INFO, "%s: mount point not found\n", path);
 		return 0;
@@ -511,7 +515,7 @@ normalize_path(char *path)
 }
 
 static void
-do_command(char *arg)
+do_command(char *arg, struct task_context *tc)
 {
 	ulong inode, i_mapping, root, dentry;
 	struct list_pair lp;
@@ -528,7 +532,7 @@ do_command(char *arg)
 
 		normalize_path(arg);
 
-		dentry = path_to_dentry(arg, &inode);
+		dentry = path_to_dentry(arg, &inode, tc);
 		if (!dentry) {
 			error(INFO, "%s: not found in dentry cache\n", arg);
 			return;
@@ -602,11 +606,24 @@ cmd_ccat(void)
 {
 	int c;
 	char *arg;
+	struct task_context *tc = NULL;
+	ulong value;
 
 	flags = DUMP_CACHES;
 
-	while ((c = getopt(argcnt, args, "S")) != EOF) {
+	while ((c = getopt(argcnt, args, "n:S")) != EOF) {
 		switch(c) {
+		case 'n':
+			switch (str_to_context(optarg, &value, &tc)) {
+			case STR_PID:
+			case STR_TASK:
+				break;
+			case STR_INVALID:
+				error(FATAL, "invalid task or pid value: %s\n",
+					optarg);
+				break;
+			}
+			break;
 		case 'S':
 			flags |= DUMP_DONT_SEEK;
 			break;
@@ -636,7 +653,7 @@ cmd_ccat(void)
 	} else
 		outfp = fp;
 
-	do_command(arg);
+	do_command(arg, tc);
 
 	if (outfp != fp)
 		close_tmpfile2();
@@ -645,8 +662,8 @@ cmd_ccat(void)
 char *help_ccat[] = {
 "ccat",				/* command name */
 "dump page caches",		/* short description */
-"[-S] inode|abspath [outfile]",	/* argument synopsis, or " " if none */
-
+"[-S] [-n pid|task] inode|abspath [outfile]",
+				/* argument synopsis, or " " if none */
 "  This command dumps the page caches of a specified inode or path like",
 "  \"cat\" command.",
 "",
@@ -656,6 +673,12 @@ char *help_ccat[] = {
 "  abspath  an absolute path.",
 "  outfile  a file path to be written. If a file already exists there,",
 "           the command fails.",
+"",
+"  For kernels supporting mount namespaces, the -n option may be used to",
+"  specify a task that has the target namespace:",
+"",
+"    -n pid   a process PID.",
+"    -n task  a hexadecimal task_struct pointer.",
 "",
 "EXAMPLE",
 "  Dump the existing page caches of the \"/var/log/messages\" file:",
@@ -686,16 +709,29 @@ void
 cmd_cls(void)
 {
 	int c;
+	struct task_context *tc = NULL;
+	ulong value;
 
 	flags = SHOW_INFO;
 
-	while ((c = getopt(argcnt, args, "adU")) != EOF) {
+	while ((c = getopt(argcnt, args, "adn:U")) != EOF) {
 		switch(c) {
 		case 'a':
 			flags |= SHOW_INFO_NEG_DENTS;
 			break;
 		case 'd':
 			flags |= SHOW_INFO_DIRS;
+			break;
+		case 'n':
+			switch (str_to_context(optarg, &value, &tc)) {
+			case STR_PID:
+			case STR_TASK:
+				break;
+			case STR_INVALID:
+				error(FATAL, "invalid task or pid value: %s\n",
+					optarg);
+				break;
+			}
 			break;
 		case 'U':
 			flags |= SHOW_INFO_DONT_SORT;
@@ -709,18 +745,18 @@ cmd_cls(void)
 	if (argerrs || !args[optind])
 		cmd_usage(pc->curcmd, SYNOPSIS);
 
-	do_command(args[optind++]);
+	do_command(args[optind++], tc);
 
 	while (args[optind]) {
 		fprintf(fp, "\n");
-		do_command(args[optind++]);
+		do_command(args[optind++], tc);
 	}
 }
 
 char *help_cls[] = {
 "cls",				/* command name */
 "list dentry and inode caches",	/* short description */
-"[-adU] abspath...",		/* argument synopsis, or " " if none */
+"[-adU] [-n pid|task] abspath...",	/* argument synopsis, or " " if none */
 
 "  This command displays the addresses of dentry, inode and i_mapping,",
 "  and nrpages of a specified absolute path and its subdirs if it exists",
@@ -729,6 +765,12 @@ char *help_cls[] = {
 "    -a  also display negative dentries in the subdirs list.",
 "    -d  display the directory itself only, without its contents.",
 "    -U  do not sort, list dentries in directory order.",
+"",
+"  For kernels supporting mount namespaces, the -n option may be used to",
+"  specify a task that has the target namespace:",
+"",
+"    -n pid   a process PID.",
+"    -n task  a hexadecimal task_struct pointer.",
 "",
 "EXAMPLE",
 "  Display the \"/var/log/messages\" regular file's information:",

@@ -35,7 +35,7 @@ NAME
   cls - list dentry and inode caches
 
 SYNOPSIS
-  cls [-adU] abspath...
+  cls [-adU] [-n pid|task] abspath...
 
 DESCRIPTION
   This command displays the addresses of dentry, inode and i_mapping,
@@ -45,6 +45,12 @@ DESCRIPTION
     -a  also display negative dentries in the subdirs list.
     -d  display the directory itself only, without its contents.
     -U  do not sort, list dentries in directory order.
+
+  For kernels supporting mount namespaces, the -n option may be used to
+  specify a task that has the target namespace:
+
+    -n pid   a process PID.
+    -n task  a hexadecimal task_struct pointer.
 
 EXAMPLE
   Display the "/var/log/messages" regular file's information:
@@ -78,7 +84,7 @@ NAME
   ccat - dump page caches
 
 SYNOPSIS
-  ccat [-S] inode|abspath [outfile]
+  ccat [-S] [-n pid|task] inode|abspath [outfile]
 
 DESCRIPTION
   This command dumps the page caches of a specified inode or path like
@@ -90,6 +96,12 @@ DESCRIPTION
   abspath  an absolute path.
   outfile  a file path to be written. If a file already exists there,
            the command fails.
+
+  For kernels supporting mount namespaces, the -n option may be used to
+  specify a task that has the target namespace:
+
+    -n pid   a process PID.
+    -n task  a hexadecimal task_struct pointer.
 
 EXAMPLE
   Dump the existing page caches of the "/var/log/messages" file:
@@ -124,7 +136,7 @@ Tested Kernels
 Plans
 -----
 
-- support mount namespace
+- ~~support mount namespace~~ (supported on 06/11/2019)
 - search directories that have many negative dentries
 
 Related Links
