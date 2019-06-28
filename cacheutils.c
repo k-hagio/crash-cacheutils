@@ -34,13 +34,16 @@ void cacheutils_init(void);
 void cacheutils_fini(void);
 void cmd_ccat(void);
 void cmd_cls(void);
+void cmd_cfind(void);
 
-#define DUMP_CACHES		(0x01)
-#define DUMP_DONT_SEEK		(0x02)
-#define SHOW_INFO		(0x10)
-#define SHOW_INFO_DIRS		(0x20)
-#define SHOW_INFO_NEG_DENTS	(0x40)
-#define SHOW_INFO_DONT_SORT	(0x80)
+#define DUMP_CACHES		(0x0001)
+#define DUMP_DONT_SEEK		(0x0002)
+#define SHOW_INFO		(0x0010)
+#define SHOW_INFO_DIRS		(0x0020)
+#define SHOW_INFO_NEG_DENTS	(0x0040)
+#define SHOW_INFO_DONT_SORT	(0x0080)
+#define FIND_FILES		(0x0100)
+#define FIND_COUNT_DENTRY	(0x0200)
 
 static char *header_fmt = "%-16s %-16s %-16s %7s %3s %s\n";
 static char *dentry_fmt = "%-16lx %-16lx %-16lx %7lu %3d %s%s\n";
@@ -310,6 +313,86 @@ show_subdirs_info(ulong dentry)
 	FREEBUF(list);
 }
 
+static void
+recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
+{
+	ulong *list;
+	int i, count, nr_negdents = 0;
+	char *dentry_buf;
+	ulong d, inode, i_mapping;
+	uint i_mode;
+	inode_info_t *inode_list, *p;
+	char *slash;
+
+	if (!(flags & FIND_COUNT_DENTRY))
+		fprintf(fp, "%s\n", arg);
+
+	if (!S_ISDIR(pi_mode))
+		return;
+
+	if (!(list = get_subdirs_list(&count, pdentry)))
+		return;
+
+	slash = (strlen(arg) == 1) ? "" : "/";
+	inode_list = (inode_info_t *)GETBUF(sizeof(inode_info_t) * count);
+
+	for (i = 0, p = inode_list; i < count; i++) {
+		d = list[i];
+		dentry_buf = fill_dentry_cache(d);
+
+		inode = ULONG(dentry_buf + OFFSET(dentry_d_inode));
+		if (inode && get_inode_info(inode, &i_mode, &i_mapping,
+					NULL, NULL)) {
+			p->inode = inode;
+			p->i_mapping = i_mapping;
+			p->i_mode = i_mode;
+		} else {
+			p->i_mapping = 0;	/* negative dentry */
+			if (!(flags & (SHOW_INFO_NEG_DENTS|FIND_COUNT_DENTRY)))
+				continue;
+			nr_negdents++;
+		}
+		p->dentry = d;
+		p->name = strdup(get_dentry_name(d, dentry_buf));
+
+		if (!(flags & FIND_COUNT_DENTRY)) {
+			if (S_ISDIR(p->i_mode)) {
+				char *path = GETBUF(BUFSIZE);
+				snprintf(path, BUFSIZE, "%s%s%s", arg, slash,
+					p->name);
+				recursive_list_dir(path, p->dentry, p->i_mode);
+				FREEBUF(path);
+			} else
+				fprintf(fp, "%s%s%s\n", arg, slash, p->name);
+		}
+
+		p++;
+	}
+
+	if (flags & FIND_COUNT_DENTRY) {
+		fprintf(fp, "%6d %6d %6d %s\n",
+			count, count - nr_negdents, nr_negdents, arg);
+	}
+
+	count = p - inode_list;
+
+	for (i = 0, p = inode_list; i < count; i++, p++) {
+		if (flags & FIND_COUNT_DENTRY) {
+			if (S_ISDIR(p->i_mode)) {
+				char *path = GETBUF(BUFSIZE);
+				snprintf(path, BUFSIZE, "%s%s%s", arg, slash,
+					p->name);
+				recursive_list_dir(path, p->dentry, p->i_mode);
+				FREEBUF(path);
+			}
+		}
+		free(p->name);
+	}
+
+	FREEBUF(inode_list);
+	FREEBUF(list);
+}
+
 static ulong
 get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 {
@@ -526,7 +609,7 @@ do_command(char *arg, struct task_context *tc)
 	if (flags & DUMP_CACHES)
 		inode = htol(arg, RETURN_ON_ERROR|QUIET, NULL);
 
-	if (flags & SHOW_INFO || inode == BADADDR) {
+	if (flags & (SHOW_INFO|FIND_FILES) || inode == BADADDR) {
 		if (arg[0] != '/')
 			cmd_usage(pc->curcmd, SYNOPSIS);
 
@@ -598,6 +681,12 @@ do_command(char *arg, struct task_context *tc)
 					i_mode, i_size, byte_to_page(i_size));
 			show_subdirs_info(dentry);
 		}
+	} else if (flags & FIND_FILES) {
+		if (flags & FIND_COUNT_DENTRY) {
+			fprintf(fp, "%6s %6s %6s %s\n",
+				"TOTAL", "DENTRY", "N_DENT", "PATH");
+		}
+		recursive_list_dir(arg, dentry, i_mode);
 	}
 }
 
@@ -801,9 +890,59 @@ char *help_cls[] = {
 NULL
 };
 
+void
+cmd_cfind(void)
+{
+	int c;
+	struct task_context *tc = NULL;
+	ulong value;
+
+	flags = FIND_FILES;
+
+	while ((c = getopt(argcnt, args, "acn:")) != EOF) {
+		switch(c) {
+		case 'a':
+			flags |= SHOW_INFO_NEG_DENTS;
+			break;
+		case 'c':
+			flags |= FIND_COUNT_DENTRY;
+			break;
+		case 'n':
+			switch (str_to_context(optarg, &value, &tc)) {
+			case STR_PID:
+			case STR_TASK:
+				break;
+			case STR_INVALID:
+				error(FATAL, "invalid task or pid value: %s\n",
+					optarg);
+				break;
+			}
+			break;
+		default:
+			argerrs++;
+			break;
+		}
+	}
+
+	if (argerrs || !args[optind])
+		cmd_usage(pc->curcmd, SYNOPSIS);
+
+	do_command(args[optind], tc);
+}
+
+char *help_cfind[] = {
+"cfind",					/* command name */
+"search for files in a directory hierarchy",	/* short description */
+"[-ac] [-n pid|task] abspath",	/* argument synopsis, or " " if none */
+
+"  This command searchs for files in a direcotry hierarchy.",
+NULL
+};
+
 static struct command_table_entry command_table[] = {
 	{ "ccat", cmd_ccat, help_ccat, 0},
 	{ "cls", cmd_cls, help_cls, 0},
+	{ "cfind", cmd_cfind, help_cfind, 0},
 	{ NULL },
 };
 
