@@ -313,86 +313,10 @@ show_subdirs_info(ulong dentry)
 	FREEBUF(list);
 }
 
-static void
-recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
-{
-	ulong *list;
-	int i, count, nr_negdents = 0;
-	char *dentry_buf;
-	ulong d, inode, i_mapping;
-	uint i_mode;
-	inode_info_t *inode_list, *p;
-	char *slash;
-
-	if (!(flags & FIND_COUNT_DENTRY))
-		fprintf(fp, "%s\n", arg);
-
-	if (!S_ISDIR(pi_mode))
-		return;
-
-	if (!(list = get_subdirs_list(&count, pdentry)))
-		return;
-
-	slash = (strlen(arg) == 1) ? "" : "/";
-	inode_list = (inode_info_t *)GETBUF(sizeof(inode_info_t) * count);
-
-	for (i = 0, p = inode_list; i < count; i++) {
-		d = list[i];
-		dentry_buf = fill_dentry_cache(d);
-
-		inode = ULONG(dentry_buf + OFFSET(dentry_d_inode));
-		if (inode && get_inode_info(inode, &i_mode, &i_mapping,
-					NULL, NULL)) {
-			p->inode = inode;
-			p->i_mapping = i_mapping;
-			p->i_mode = i_mode;
-		} else {
-			p->i_mapping = 0;	/* negative dentry */
-			if (!(flags & (SHOW_INFO_NEG_DENTS|FIND_COUNT_DENTRY)))
-				continue;
-			nr_negdents++;
-		}
-		p->dentry = d;
-		p->name = strdup(get_dentry_name(d, dentry_buf));
-
-		if (!(flags & FIND_COUNT_DENTRY)) {
-			if (S_ISDIR(p->i_mode)) {
-				char *path = GETBUF(BUFSIZE);
-				snprintf(path, BUFSIZE, "%s%s%s", arg, slash,
-					p->name);
-				recursive_list_dir(path, p->dentry, p->i_mode);
-				FREEBUF(path);
-			} else
-				fprintf(fp, "%s%s%s\n", arg, slash, p->name);
-		}
-
-		p++;
-	}
-
-	if (flags & FIND_COUNT_DENTRY) {
-		fprintf(fp, "%6d %6d %6d %s\n",
-			count, count - nr_negdents, nr_negdents, arg);
-	}
-
-	count = p - inode_list;
-
-	for (i = 0, p = inode_list; i < count; i++, p++) {
-		if (flags & FIND_COUNT_DENTRY) {
-			if (S_ISDIR(p->i_mode)) {
-				char *path = GETBUF(BUFSIZE);
-				snprintf(path, BUFSIZE, "%s%s%s", arg, slash,
-					p->name);
-				recursive_list_dir(path, p->dentry, p->i_mode);
-				FREEBUF(path);
-			}
-		}
-		free(p->name);
-	}
-
-	FREEBUF(inode_list);
-	FREEBUF(list);
-}
-
+/*
+ * If remaining_path is NULL, search for a mount point that matches exactly
+ * with the path.
+ */
 static ulong
 get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 {
@@ -466,6 +390,9 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 			}
 		}
 		if (root)
+			break;
+
+		if (!remaining_path) /* exact match for cfind */
 			break;
 
 		if ((slash_pos = strrchr(path_buf, '/')) == NULL)
@@ -568,6 +495,90 @@ not_found:
 	FREEBUF(path_buf);
 
 	return dentry;
+}
+
+typedef struct {
+	ulong dentry;
+	char *name;
+	uint i_mode;
+} dentry_info_t;
+
+static void
+recursive_list_dir(char *arg, ulong pdentry, uint pi_mode,
+		struct task_context *tc)
+{
+	ulong *list;
+	int i, count, nr_negdents = 0;
+	char *dentry_buf, *slash;
+	ulong d, inode;
+	uint i_mode;
+	dentry_info_t *dentry_list, *p;
+
+	if (!(flags & FIND_COUNT_DENTRY))
+		fprintf(fp, "%s\n", arg);
+
+	if (!S_ISDIR(pi_mode))
+		return;
+
+	if (!(list = get_subdirs_list(&count, pdentry)))
+		return;
+
+	slash = (strlen(arg) == 1) ? "" : "/";
+	dentry_list = (dentry_info_t *)GETBUF(sizeof(dentry_info_t) * count);
+
+	for (i = 0, p = dentry_list; i < count; i++) {
+		d = list[i];
+		dentry_buf = fill_dentry_cache(d);
+
+		inode = ULONG(dentry_buf + OFFSET(dentry_d_inode));
+		if (inode && get_inode_info(inode, &i_mode, NULL, NULL, NULL))
+			p->i_mode = i_mode;
+		else {
+			if (flags & FIND_COUNT_DENTRY) {
+				nr_negdents++;
+				continue;
+			}
+			if (!(flags & SHOW_INFO_NEG_DENTS))
+				continue;
+		}
+		p->dentry = d;
+		p->name = strdup(get_dentry_name(d, dentry_buf));
+		p++;
+	}
+
+	if (flags & FIND_COUNT_DENTRY) {
+		fprintf(fp, "%6d %6d %6d %s\n",
+			count, count - nr_negdents, nr_negdents, arg);
+	}
+
+	count = p - dentry_list;
+
+	for (i = 0, p = dentry_list; i < count; i++, p++) {
+		if (S_ISDIR(p->i_mode)) {
+			char *path = GETBUF(BUFSIZE);
+			snprintf(path, BUFSIZE, "%s%s%s", arg, slash, p->name);
+
+			d = get_mntpoint_dentry(path, NULL, tc);
+			if (d) {
+				dentry_buf = fill_dentry_cache(d);
+				inode = ULONG(dentry_buf + OFFSET(dentry_d_inode));
+				if (inode && get_inode_info(inode, &i_mode,
+						NULL, NULL, NULL))
+					recursive_list_dir(path, d, i_mode, tc);
+				else
+					error(INFO, "%s: invalid inode\n", path);
+			} else /* normal directory */
+				recursive_list_dir(path, p->dentry, p->i_mode, tc);
+
+			FREEBUF(path);
+		} else if (!(flags & FIND_COUNT_DENTRY))
+			fprintf(fp, "%s%s%s\n", arg, slash, p->name);
+
+		free(p->name);
+	}
+
+	FREEBUF(dentry_list);
+	FREEBUF(list);
 }
 
 /*
@@ -686,7 +697,7 @@ do_command(char *arg, struct task_context *tc)
 			fprintf(fp, "%6s %6s %6s %s\n",
 				"TOTAL", "DENTRY", "N_DENT", "PATH");
 		}
-		recursive_list_dir(arg, dentry, i_mode);
+		recursive_list_dir(arg, dentry, i_mode, tc);
 	}
 }
 
