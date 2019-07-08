@@ -56,6 +56,10 @@ static char *pgbuf;
 static ulong nr_written, nr_excluded;
 static ulonglong i_size;
 
+/* Per-command caches */
+static char *mount_data;
+static int mount_count;
+
 static int
 dump_slot(ulong slot)
 {
@@ -321,12 +325,13 @@ static ulong
 get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 {
 	ulong pid, *mount_list;
-	int i, count;
+	int i;
 	size_t len;
 	struct task_context *nscon;
 	char *mount_buf, *path_buf, *path_start, *slash_pos;
 	char buf[BUFSIZE], *bufp = buf;
 	ulong root, parent, mountp;
+	long size;
 
 	if (tc)
 		nscon = tc;
@@ -336,10 +341,20 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 			pid++;
 	}
 
-	mount_list = get_mount_list(&count, nscon);
-
-	mount_buf = VALID_STRUCT(mount) ? GETBUF(SIZE(mount)) :
-			GETBUF(SIZE(vfsmount));
+	size = VALID_STRUCT(mount) ? SIZE(mount) : SIZE(vfsmount);
+	if (!mount_data) {
+		mount_list = get_mount_list(&mount_count, nscon);
+		mount_data = GETBUF(size * mount_count);
+		for (i = 0; i < mount_count; i++) {
+			if (!readmem(mount_list[i], KVADDR, mount_data +
+			    (size * i), size, "(vfs)mount buffer",
+			    RETURN_ON_ERROR)) {
+				FREEBUF(mount_list);
+				goto bail_out;
+			}
+		}
+		FREEBUF(mount_list);
+	}
 
 	len = strlen(path);
 	path_buf = GETBUF(len + 1);
@@ -349,11 +364,8 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 
 	root = 0;
 	while (TRUE) {
-		for (i = 0; i < count; i++) {
-			if (!readmem(mount_list[i], KVADDR, mount_buf,
-			    VALID_STRUCT(mount) ? SIZE(mount) : SIZE(vfsmount),
-			    "(vfs)mount buffer", RETURN_ON_ERROR))
-				goto bail_out;
+		for (i = 0; i < mount_count; i++) {
+			mount_buf = mount_data + (size * i);
 
 			if (VALID_STRUCT(mount)) {
 				parent = ULONG(mount_buf +
@@ -414,11 +426,8 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 	if (root && remaining_path)
 		*remaining_path = path_start;
 
-bail_out:
 	FREEBUF(path_buf);
-	FREEBUF(mount_buf);
-	FREEBUF(mount_list);
-
+bail_out:
 	return root;
 }
 
@@ -702,6 +711,25 @@ do_command(char *arg, struct task_context *tc)
 }
 
 void
+init_mount_cache(void) {
+	/* In case that the last command was interrupted. */
+	if (mount_data) {
+		mount_data = NULL;
+		mount_count = 0;
+	}
+}
+
+void
+clear_mount_cache(void)
+{
+	if (mount_data) {
+		FREEBUF(mount_data);
+		mount_data = NULL;
+		mount_count = 0;
+	}
+}
+
+void
 cmd_ccat(void)
 {
 	int c;
@@ -753,8 +781,11 @@ cmd_ccat(void)
 	} else
 		outfp = fp;
 
+	init_mount_cache();
+
 	do_command(arg, tc);
 
+	clear_mount_cache();
 	if (outfp != fp)
 		close_tmpfile2();
 }
@@ -845,12 +876,16 @@ cmd_cls(void)
 	if (argerrs || !args[optind])
 		cmd_usage(pc->curcmd, SYNOPSIS);
 
+	init_mount_cache();
+
 	do_command(args[optind++], tc);
 
 	while (args[optind]) {
 		fprintf(fp, "\n");
 		do_command(args[optind++], tc);
 	}
+
+	clear_mount_cache();
 }
 
 char *help_cls[] = {
@@ -938,7 +973,11 @@ cmd_cfind(void)
 	if (argerrs || !args[optind])
 		cmd_usage(pc->curcmd, SYNOPSIS);
 
+	init_mount_cache();
+
 	do_command(args[optind], tc);
+
+	clear_mount_cache();
 }
 
 char *help_cfind[] = {
