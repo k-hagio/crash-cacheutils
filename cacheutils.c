@@ -57,8 +57,9 @@ static ulong nr_written, nr_excluded;
 static ulonglong i_size;
 
 /* Per-command caches */
-static char *mount_data;
 static int mount_count;
+static char *mount_data;
+static char **mount_path;
 
 static int
 dump_slot(ulong slot)
@@ -329,7 +330,7 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 	size_t len;
 	struct task_context *nscon;
 	char *mount_buf, *path_buf, *path_start, *slash_pos;
-	char buf[BUFSIZE], *bufp = buf;
+	char buf[PATH_MAX], *bufp = buf;
 	ulong root, parent, mountp;
 	long size;
 
@@ -345,6 +346,8 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 	if (!mount_data) {
 		mount_list = get_mount_list(&mount_count, nscon);
 		mount_data = GETBUF(size * mount_count);
+		mount_path = (char **)GETBUF(sizeof(char *) * mount_count);
+
 		for (i = 0; i < mount_count; i++) {
 			if (!readmem(mount_list[i], KVADDR, mount_data +
 			    (size * i), size, "(vfs)mount buffer",
@@ -352,19 +355,7 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 				FREEBUF(mount_list);
 				goto bail_out;
 			}
-		}
-		FREEBUF(mount_list);
-	}
 
-	len = strlen(path);
-	path_buf = GETBUF(len + 1);
-	memcpy(path_buf, path, len + 1);
-
-	path_start = path + len;
-
-	root = 0;
-	while (TRUE) {
-		for (i = 0; i < mount_count; i++) {
 			mount_buf = mount_data + (size * i);
 
 			if (VALID_STRUCT(mount)) {
@@ -382,6 +373,25 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 				get_pathname(mountp, bufp, BUFSIZE, 1,
 					parent);
 			}
+
+			len = strnlen(bufp, PATH_MAX);
+			mount_path[i] = GETBUF(len + 1);
+			memcpy(mount_path[i], bufp, len + 1);
+		}
+		FREEBUF(mount_list);
+	}
+
+	len = strlen(path);
+	path_buf = GETBUF(len + 1);
+	memcpy(path_buf, path, len + 1);
+
+	path_start = path + len;
+
+	root = 0;
+	while (TRUE) {
+		for (i = 0; i < mount_count; i++) {
+			mount_buf = mount_data + (size * i);
+			bufp = mount_path[i];
 
 			if (CRASHDEBUG(2))
 				error(INFO, "path:%s PATHEQ:%d mntp:%s\n",
@@ -524,7 +534,7 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode,
 	dentry_info_t *dentry_list, *p;
 
 	if (!(flags & FIND_COUNT_DENTRY))
-		fprintf(fp, "%s\n", arg);
+		fprintf(fp, "%16lx %s\n", pdentry, arg);
 
 	if (!S_ISDIR(pi_mode))
 		return;
@@ -581,7 +591,7 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode,
 
 			FREEBUF(path);
 		} else if (!(flags & FIND_COUNT_DENTRY))
-			fprintf(fp, "%s%s%s\n", arg, slash, p->name);
+			fprintf(fp, "%16lx %s%s%s\n", p->dentry, arg, slash, p->name);
 
 		free(p->name);
 	}
@@ -715,6 +725,7 @@ init_mount_cache(void) {
 	/* In case that the last command was interrupted. */
 	if (mount_data) {
 		mount_data = NULL;
+		mount_path = NULL;
 		mount_count = 0;
 	}
 }
@@ -722,9 +733,16 @@ init_mount_cache(void) {
 void
 clear_mount_cache(void)
 {
+	int i;
+
 	if (mount_data) {
 		FREEBUF(mount_data);
+		for (i = 0; i < mount_count; i++) {
+			FREEBUF(mount_path[i]);
+		}
+		FREEBUF(mount_path);
 		mount_data = NULL;
+		mount_path = NULL;
 		mount_count = 0;
 	}
 }
