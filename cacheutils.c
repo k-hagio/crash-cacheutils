@@ -55,6 +55,7 @@ static FILE *outfp;
 static char *pgbuf;
 static ulong nr_written, nr_excluded;
 static ulonglong i_size;
+static struct task_context *tc;
 
 /* Per-command caches */
 static int mount_count;
@@ -323,28 +324,19 @@ show_subdirs_info(ulong dentry)
  * with the path.
  */
 static ulong
-get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
+get_mntpoint_dentry(char *path, char **remaining_path)
 {
-	ulong pid, *mount_list;
+	ulong *mount_list;
 	int i;
 	size_t len;
-	struct task_context *nscon;
 	char *mount_buf, *path_buf, *path_start, *slash_pos;
 	char buf[PATH_MAX], *bufp = buf;
 	ulong root, parent, mountp;
 	long size;
 
-	if (tc)
-		nscon = tc;
-	else {
-		pid = 0;
-		while ((nscon = pid_to_context(pid)) == NULL)
-			pid++;
-	}
-
 	size = VALID_STRUCT(mount) ? SIZE(mount) : SIZE(vfsmount);
 	if (!mount_data) {
-		mount_list = get_mount_list(&mount_count, nscon);
+		mount_list = get_mount_list(&mount_count, tc);
 		mount_data = GETBUF(size * mount_count);
 		mount_path = (char **)GETBUF(sizeof(char *) * mount_count);
 
@@ -442,13 +434,13 @@ bail_out:
 }
 
 static ulong
-path_to_dentry(char *path, ulong *inode, struct task_context *tc)
+path_to_dentry(char *path, ulong *inode)
 {
 	int i, count;
 	ulong *subdirs_list, root, d, dentry;
 	char *path_buf, *dentry_buf, *slash_pos, *path_start, *name;
 
-	root = get_mntpoint_dentry(path, &path_start, tc);
+	root = get_mntpoint_dentry(path, &path_start);
 	if (!root) {
 		error(INFO, "%s: mount point not found\n", path);
 		return 0;
@@ -523,8 +515,7 @@ typedef struct {
 } dentry_info_t;
 
 static void
-recursive_list_dir(char *arg, ulong pdentry, uint pi_mode,
-		struct task_context *tc)
+recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 {
 	ulong *list;
 	int i, count, nr_negdents = 0;
@@ -577,17 +568,17 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode,
 			char *path = GETBUF(BUFSIZE);
 			snprintf(path, BUFSIZE, "%s%s%s", arg, slash, p->name);
 
-			d = get_mntpoint_dentry(path, NULL, tc);
+			d = get_mntpoint_dentry(path, NULL);
 			if (d) {
 				dentry_buf = fill_dentry_cache(d);
 				inode = ULONG(dentry_buf + OFFSET(dentry_d_inode));
 				if (inode && get_inode_info(inode, &i_mode,
 						NULL, NULL, NULL))
-					recursive_list_dir(path, d, i_mode, tc);
+					recursive_list_dir(path, d, i_mode);
 				else
 					error(INFO, "%s: invalid inode\n", path);
 			} else /* normal directory */
-				recursive_list_dir(path, p->dentry, p->i_mode, tc);
+				recursive_list_dir(path, p->dentry, p->i_mode);
 
 			FREEBUF(path);
 		} else if (!(flags & FIND_COUNT_DENTRY))
@@ -628,7 +619,7 @@ normalize_path(char *path)
 }
 
 static void
-do_command(char *arg, struct task_context *tc)
+do_command(char *arg)
 {
 	ulong inode, i_mapping, root, dentry;
 	struct list_pair lp;
@@ -645,7 +636,7 @@ do_command(char *arg, struct task_context *tc)
 
 		normalize_path(arg);
 
-		dentry = path_to_dentry(arg, &inode, tc);
+		dentry = path_to_dentry(arg, &inode);
 		if (!dentry) {
 			error(INFO, "%s: not found in dentry cache\n", arg);
 			return;
@@ -716,7 +707,7 @@ do_command(char *arg, struct task_context *tc)
 			fprintf(fp, "%6s %6s %6s %s\n",
 				"TOTAL", "DENTRY", "N_DENT", "PATH");
 		}
-		recursive_list_dir(arg, dentry, i_mode, tc);
+		recursive_list_dir(arg, dentry, i_mode);
 	}
 }
 
@@ -748,14 +739,23 @@ clear_mount_cache(void)
 }
 
 void
+set_default_task_context(void)
+{
+	ulong pid = 0;
+
+	while ((tc = pid_to_context(pid)) == NULL)
+		pid++;
+}
+
+void
 cmd_ccat(void)
 {
 	int c;
 	char *arg;
-	struct task_context *tc = NULL;
 	ulong value;
 
 	flags = DUMP_CACHES;
+	tc = NULL;
 
 	while ((c = getopt(argcnt, args, "n:S")) != EOF) {
 		switch(c) {
@@ -799,9 +799,12 @@ cmd_ccat(void)
 	} else
 		outfp = fp;
 
+	if (!tc)
+		set_default_task_context();
+
 	init_mount_cache();
 
-	do_command(arg, tc);
+	do_command(arg);
 
 	clear_mount_cache();
 	if (outfp != fp)
@@ -858,10 +861,10 @@ void
 cmd_cls(void)
 {
 	int c;
-	struct task_context *tc = NULL;
 	ulong value;
 
 	flags = SHOW_INFO;
+	tc = NULL;
 
 	while ((c = getopt(argcnt, args, "adn:U")) != EOF) {
 		switch(c) {
@@ -894,13 +897,16 @@ cmd_cls(void)
 	if (argerrs || !args[optind])
 		cmd_usage(pc->curcmd, SYNOPSIS);
 
+	if (!tc)
+		set_default_task_context();
+
 	init_mount_cache();
 
-	do_command(args[optind++], tc);
+	do_command(args[optind++]);
 
 	while (args[optind]) {
 		fprintf(fp, "\n");
-		do_command(args[optind++], tc);
+		do_command(args[optind++]);
 	}
 
 	clear_mount_cache();
@@ -958,10 +964,10 @@ void
 cmd_cfind(void)
 {
 	int c;
-	struct task_context *tc = NULL;
 	ulong value;
 
 	flags = FIND_FILES;
+	tc = NULL;
 
 	while ((c = getopt(argcnt, args, "acn:")) != EOF) {
 		switch(c) {
@@ -991,9 +997,12 @@ cmd_cfind(void)
 	if (argerrs || !args[optind])
 		cmd_usage(pc->curcmd, SYNOPSIS);
 
+	if (!tc)
+		set_default_task_context();
+
 	init_mount_cache();
 
-	do_command(args[optind], tc);
+	do_command(args[optind]);
 
 	clear_mount_cache();
 }
