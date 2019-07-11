@@ -61,6 +61,7 @@ static struct task_context *tc;
 static int mount_count;
 static char *mount_data;
 static char **mount_path;
+static char *dentry_data;
 
 static int
 dump_slot(ulong slot)
@@ -519,7 +520,7 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 {
 	ulong *list;
 	int i, count, nr_negdents = 0;
-	char *dentry_buf, *slash;
+	char *slash;
 	ulong d, inode;
 	uint i_mode;
 	dentry_info_t *dentry_list, *p;
@@ -538,9 +539,10 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 
 	for (i = 0, p = dentry_list; i < count; i++) {
 		d = list[i];
-		dentry_buf = fill_dentry_cache(d);
+		readmem(d, KVADDR, dentry_data, SIZE(dentry),
+			"dentry", FAULT_ON_ERROR);
 
-		inode = ULONG(dentry_buf + OFFSET(dentry_d_inode));
+		inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
 		if (inode && get_inode_info(inode, &i_mode, NULL, NULL, NULL))
 			p->i_mode = i_mode;
 		else {
@@ -552,7 +554,7 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 				continue;
 		}
 		p->dentry = d;
-		p->name = strdup(get_dentry_name(d, dentry_buf));
+		p->name = strdup(get_dentry_name(d, dentry_data));
 		p++;
 	}
 
@@ -570,8 +572,9 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 
 			d = get_mntpoint_dentry(path, NULL);
 			if (d) {
-				dentry_buf = fill_dentry_cache(d);
-				inode = ULONG(dentry_buf + OFFSET(dentry_d_inode));
+				readmem(d, KVADDR, dentry_data, SIZE(dentry),
+					"dentry", FAULT_ON_ERROR);
+				inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
 				if (inode && get_inode_info(inode, &i_mode,
 						NULL, NULL, NULL))
 					recursive_list_dir(path, d, i_mode);
@@ -711,18 +714,19 @@ do_command(char *arg)
 	}
 }
 
-void
-init_mount_cache(void) {
+static void
+init_cache(void) {
 	/* In case that the last command was interrupted. */
 	if (mount_data) {
 		mount_data = NULL;
 		mount_path = NULL;
 		mount_count = 0;
 	}
+	dentry_data = GETBUF(SIZE(dentry));
 }
 
-void
-clear_mount_cache(void)
+static void
+clear_cache(void)
 {
 	int i;
 
@@ -736,9 +740,10 @@ clear_mount_cache(void)
 		mount_path = NULL;
 		mount_count = 0;
 	}
+	FREEBUF(dentry_data);
 }
 
-void
+static void
 set_default_task_context(void)
 {
 	ulong pid = 0;
@@ -802,11 +807,11 @@ cmd_ccat(void)
 	if (!tc)
 		set_default_task_context();
 
-	init_mount_cache();
+	init_cache();
 
 	do_command(arg);
 
-	clear_mount_cache();
+	clear_cache();
 	if (outfp != fp)
 		close_tmpfile2();
 }
@@ -900,7 +905,7 @@ cmd_cls(void)
 	if (!tc)
 		set_default_task_context();
 
-	init_mount_cache();
+	init_cache();
 
 	do_command(args[optind++]);
 
@@ -909,7 +914,7 @@ cmd_cls(void)
 		do_command(args[optind++]);
 	}
 
-	clear_mount_cache();
+	clear_cache();
 }
 
 char *help_cls[] = {
@@ -1000,11 +1005,11 @@ cmd_cfind(void)
 	if (!tc)
 		set_default_task_context();
 
-	init_mount_cache();
+	init_cache();
 
 	do_command(args[optind]);
 
-	clear_mount_cache();
+	clear_cache();
 }
 
 char *help_cfind[] = {
