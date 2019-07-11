@@ -1026,11 +1026,38 @@ cmd_cfind(void)
 }
 
 char *help_cfind[] = {
-"cfind",					/* command name */
-"search for files in a directory hierarchy",	/* short description */
-"[-ac] [-n pid|task] abspath",	/* argument synopsis, or " " if none */
+"cfind",
+"search for files/dentries in a directory hierarchy",
+"[-ac] [-n pid|task] abspath",
 
-"  This command searchs for files in a direcotry hierarchy.",
+"  This command searches for files/dentries in a directory hierarchy across",
+"  mounted file systems like \"find\" command.",
+"",
+"    -a  also display negative dentries.",
+"    -c  count dentries in each directory.",
+"",
+"  For kernels supporting mount namespaces, the -n option may be used to",
+"  specify a task that has the target namespace:",
+"",
+"    -n pid   a process PID.",
+"    -n task  a hexadecimal task_struct pointer.",
+"",
+"EXAMPLE",
+"  Search for \"messages\" file in / hierarchy:",
+"",
+"    %s> cfind / | grep messages",
+"    ffff88010113be00 /var/log/messages",
+"    ffff880449f86b40 /usr/lib/python2.7/site-packages/babel/messages",
+"",
+"  Count dentries in /tmp directory and its subdirectories:",
+"",
+"    %s> cfind -c /tmp",
+"      TOTAL DENTRY N_DENT PATH",
+"        615      9    606 /tmp",
+"          1      1      0 /tmp/systemd-private-f94cc7530e524709...-U8nOww",
+"          1      1      0 /tmp/systemd-private-f94cc7530e524709...-qb8Qke",
+"          1      1      0 /tmp/systemd-private-f94cc7530e524709...-aVh468",
+"        618     12    606 TOTAL",
 NULL
 };
 
