@@ -48,6 +48,8 @@ void cmd_cfind(void);
 static char *header_fmt = "%-16s %-16s %-16s %7s %3s %s\n";
 static char *dentry_fmt = "%-16lx %-16lx %-16lx %7lu %3d %s%s\n";
 static char *negdent_fmt = "%-16lx %-16s %-16s %7s %3s %s\n";
+static char *count_header_fmt = "%7s %6s %6s %s\n";
+static char *count_dentry_fmt = "%7d %6d %6d %s\n";
 
 /* Global variables */
 static int flags;
@@ -56,6 +58,7 @@ static char *pgbuf;
 static ulong nr_written, nr_excluded;
 static ulonglong i_size;
 static struct task_context *tc;
+static int total_dentry, total_negdent;
 
 /* Per-command caches */
 static int mount_count;
@@ -559,8 +562,10 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 	}
 
 	if (flags & FIND_COUNT_DENTRY) {
-		fprintf(fp, "%6d %6d %6d %s\n",
+		fprintf(fp, count_dentry_fmt,
 			count, count - nr_negdents, nr_negdents, arg);
+		total_dentry += count;
+		total_negdent += nr_negdents;
 	}
 
 	count = p - dentry_list;
@@ -707,10 +712,18 @@ do_command(char *arg)
 		}
 	} else if (flags & FIND_FILES) {
 		if (flags & FIND_COUNT_DENTRY) {
-			fprintf(fp, "%6s %6s %6s %s\n",
+			fprintf(fp, count_header_fmt,
 				"TOTAL", "DENTRY", "N_DENT", "PATH");
+			total_dentry = total_negdent = 0;
 		}
+
 		recursive_list_dir(arg, dentry, i_mode);
+
+		if (flags & FIND_COUNT_DENTRY) {
+			fprintf(fp, count_dentry_fmt,
+				total_dentry, total_dentry - total_negdent,
+				total_negdent, "TOTAL");
+		}
 	}
 }
 
