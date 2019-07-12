@@ -579,7 +579,9 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 			if (d) {
 				readmem(d, KVADDR, dentry_data, SIZE(dentry),
 					"dentry", FAULT_ON_ERROR);
-				inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
+
+				inode = ULONG(dentry_data +
+						OFFSET(dentry_d_inode));
 				if (inode && get_inode_info(inode, &i_mode,
 						NULL, NULL, NULL))
 					recursive_list_dir(path, d, i_mode);
@@ -590,7 +592,8 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 
 			FREEBUF(path);
 		} else if (!(flags & FIND_COUNT_DENTRY))
-			fprintf(fp, "%16lx %s%s%s\n", p->dentry, arg, slash, p->name);
+			fprintf(fp, "%16lx %s%s%s\n",
+				p->dentry, arg, slash, p->name);
 
 		free(p->name);
 	}
@@ -1043,7 +1046,7 @@ char *help_cfind[] = {
 "    -n task  a hexadecimal task_struct pointer.",
 "",
 "EXAMPLE",
-"  Search for \"messages\" file in / hierarchy:",
+"  Search for \"messages\" files in / hierarchy:",
 "",
 "    %s> cfind / | grep messages",
 "    ffff88010113be00 /var/log/messages",
