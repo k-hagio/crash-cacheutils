@@ -534,8 +534,11 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 	if (!S_ISDIR(pi_mode))
 		return;
 
-	if (!(list = get_subdirs_list(&count, pdentry)))
+	if (!(list = get_subdirs_list(&count, pdentry))) {
+		if (flags & FIND_COUNT_DENTRY)
+			fprintf(fp, count_dentry_fmt, 0, 0, 0, arg);
 		return;
+	}
 
 	slash = (strlen(arg) == 1) ? "" : "/";
 	dentry_list = (dentry_info_t *)GETBUF(sizeof(dentry_info_t) * count);
@@ -1030,11 +1033,11 @@ cmd_cfind(void)
 
 char *help_cfind[] = {
 "cfind",
-"search for files/dentries in a directory hierarchy",
+"search for files in a directory hierarchy",
 "[-ac] [-n pid|task] abspath",
 
-"  This command searches for files/dentries in a directory hierarchy across",
-"  mounted file systems like \"find\" command.",
+"  This command searches for files in a directory hierarchy across mounted",
+"  file systems like a \"find\" command.",
 "",
 "    -a  also display negative dentries.",
 "    -c  count dentries in each directory.",
@@ -1046,21 +1049,26 @@ char *help_cfind[] = {
 "    -n task  a hexadecimal task_struct pointer.",
 "",
 "EXAMPLE",
-"  Search for \"messages\" files in / hierarchy:",
+"  Search for \"messages\" files through the root file system with the grep",
+"  command:",
 "",
 "    %s> cfind / | grep messages",
 "    ffff88010113be00 /var/log/messages",
 "    ffff880449f86b40 /usr/lib/python2.7/site-packages/babel/messages",
 "",
-"  Count dentries in /tmp directory and its subdirectories:",
+"  Count dentries in the /boot directory and its subdirectories:",
 "",
-"    %s> cfind -c /tmp",
+"    %s> cfind -c /boot",
 "      TOTAL DENTRY N_DENT PATH",
-"        615      9    606 /tmp",
-"          1      1      0 /tmp/systemd-private-f94cc7530e524709...-U8nOww",
-"          1      1      0 /tmp/systemd-private-f94cc7530e524709...-qb8Qke",
-"          1      1      0 /tmp/systemd-private-f94cc7530e524709...-aVh468",
-"        618     12    606 TOTAL",
+"         18     12      6 /boot",
+"          8      6      2 /boot/grub2",
+"         34     34      0 /boot/grub2/locale",
+"        268    268      0 /boot/grub2/i386-pc",
+"          1      1      0 /boot/grub2/fonts",
+"          1      1      0 /boot/efi",
+"          2      1      1 /boot/efi/EFI",
+"          3      0      3 /boot/efi/EFI/redhat",
+"        335    323     12 TOTAL",
 NULL
 };
 
