@@ -126,6 +126,48 @@ EXAMPLE
   NOTE: Redirecting to a file will also works, but it can includes crash's
   messages, so specifying an outfile is recommended for restoring a file.
 ```
+```
+NAME
+  cfind - search for files in a directory hierarchy
+
+SYNOPSIS
+  cfind [-ac] [-n pid|task] abspath
+
+DESCRIPTION
+  This command searches for files in a directory hierarchy across mounted
+  file systems like a "find" command.
+
+    -a  also display negative dentries.
+    -c  count dentries in each directory.
+
+  For kernels supporting mount namespaces, the -n option may be used to
+  specify a task that has the target namespace:
+
+    -n pid   a process PID.
+    -n task  a hexadecimal task_struct pointer.
+
+EXAMPLE
+  Search for "messages" files through the root file system with the grep
+  command:
+
+    crash> cfind / | grep messages
+    ffff88010113be00 /var/log/messages
+    ffff880449f86b40 /usr/lib/python2.7/site-packages/babel/messages
+
+  Count dentries in the /boot directory and its subdirectories:
+
+    crash> cfind -c /boot
+      TOTAL DENTRY N_DENT PATH
+         18     12      6 /boot
+          8      6      2 /boot/grub2
+         34     34      0 /boot/grub2/locale
+        268    268      0 /boot/grub2/i386-pc
+          1      1      0 /boot/grub2/fonts
+          1      1      0 /boot/efi
+          2      1      1 /boot/efi/EFI
+          3      0      3 /boot/efi/EFI/redhat
+        335    323     12 TOTAL
+```
 
 Tested Kernels
 --------------
@@ -137,7 +179,7 @@ Plans
 -----
 
 - ~~support mount namespace~~ (supported on 06/11/2019)
-- search directories that have many negative dentries
+- ~~search directories that have many negative dentries~~ (supported on 07/12/2019)
 
 Related Links
 -------------
