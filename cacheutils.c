@@ -34,17 +34,22 @@ void cacheutils_init(void);
 void cacheutils_fini(void);
 void cmd_ccat(void);
 void cmd_cls(void);
+void cmd_cfind(void);
 
-#define DUMP_CACHES		(0x01)
-#define DUMP_DONT_SEEK		(0x02)
-#define SHOW_INFO		(0x10)
-#define SHOW_INFO_DIRS		(0x20)
-#define SHOW_INFO_NEG_DENTS	(0x40)
-#define SHOW_INFO_DONT_SORT	(0x80)
+#define DUMP_CACHES		(0x0001)
+#define DUMP_DONT_SEEK		(0x0002)
+#define SHOW_INFO		(0x0010)
+#define SHOW_INFO_DIRS		(0x0020)
+#define SHOW_INFO_NEG_DENTS	(0x0040)
+#define SHOW_INFO_DONT_SORT	(0x0080)
+#define FIND_FILES		(0x0100)
+#define FIND_COUNT_DENTRY	(0x0200)
 
 static char *header_fmt = "%-16s %-16s %-16s %7s %3s %s\n";
 static char *dentry_fmt = "%-16lx %-16lx %-16lx %7lu %3d %s%s\n";
 static char *negdent_fmt = "%-16lx %-16s %-16s %7s %3s %s\n";
+static char *count_header_fmt = "%7s %6s %6s %s\n";
+static char *count_dentry_fmt = "%7d %6d %6d %s\n";
 
 /* Global variables */
 static int flags;
@@ -52,6 +57,14 @@ static FILE *outfp;
 static char *pgbuf;
 static ulong nr_written, nr_excluded;
 static ulonglong i_size;
+static struct task_context *tc;
+static int total_dentry, total_negdent;
+
+/* Per-command caches */
+static int mount_count;
+static char *mount_data;
+static char **mount_path;
+static char *dentry_data;
 
 static int
 dump_slot(ulong slot)
@@ -310,29 +323,59 @@ show_subdirs_info(ulong dentry)
 	FREEBUF(list);
 }
 
+/*
+ * If remaining_path is NULL, search for a mount point that matches exactly
+ * with the path.
+ */
 static ulong
-get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
+get_mntpoint_dentry(char *path, char **remaining_path)
 {
-	ulong pid, *mount_list;
-	int i, count;
+	ulong *mount_list;
+	int i;
 	size_t len;
-	struct task_context *nscon;
 	char *mount_buf, *path_buf, *path_start, *slash_pos;
-	char buf[BUFSIZE], *bufp = buf;
+	char buf[PATH_MAX], *bufp = buf;
 	ulong root, parent, mountp;
+	long size;
 
-	if (tc)
-		nscon = tc;
-	else {
-		pid = 0;
-		while ((nscon = pid_to_context(pid)) == NULL)
-			pid++;
+	size = VALID_STRUCT(mount) ? SIZE(mount) : SIZE(vfsmount);
+	if (!mount_data) {
+		mount_list = get_mount_list(&mount_count, tc);
+		mount_data = GETBUF(size * mount_count);
+		mount_path = (char **)GETBUF(sizeof(char *) * mount_count);
+
+		for (i = 0; i < mount_count; i++) {
+			if (!readmem(mount_list[i], KVADDR, mount_data +
+			    (size * i), size, "(vfs)mount buffer",
+			    RETURN_ON_ERROR)) {
+				FREEBUF(mount_list);
+				goto bail_out;
+			}
+
+			mount_buf = mount_data + (size * i);
+
+			if (VALID_STRUCT(mount)) {
+				parent = ULONG(mount_buf +
+					OFFSET(mount_mnt_parent));
+				mountp = ULONG(mount_buf +
+					OFFSET(mount_mnt_mountpoint));
+				get_pathname(mountp, bufp, PATH_MAX, 1,
+					parent + OFFSET(mount_mnt));
+			} else {
+				parent = ULONG(mount_buf +
+					OFFSET(vfsmount_mnt_parent));
+				mountp = ULONG(mount_buf +
+					OFFSET(vfsmount_mnt_mountpoint));
+				get_pathname(mountp, bufp, PATH_MAX, 1,
+					parent);
+			}
+
+			len = strnlen(bufp, PATH_MAX);
+			mount_path[i] = GETBUF(len + 1);
+			memcpy(mount_path[i], bufp, len + 1);
+		}
+		FREEBUF(mount_list);
 	}
-
-	mount_list = get_mount_list(&count, nscon);
-
-	mount_buf = VALID_STRUCT(mount) ? GETBUF(SIZE(mount)) :
-			GETBUF(SIZE(vfsmount));
 
 	len = strlen(path);
 	path_buf = GETBUF(len + 1);
@@ -342,27 +385,9 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 
 	root = 0;
 	while (TRUE) {
-		for (i = 0; i < count; i++) {
-			if (!readmem(mount_list[i], KVADDR, mount_buf,
-			    VALID_STRUCT(mount) ? SIZE(mount) : SIZE(vfsmount),
-			    "(vfs)mount buffer", RETURN_ON_ERROR))
-				goto bail_out;
-
-			if (VALID_STRUCT(mount)) {
-				parent = ULONG(mount_buf +
-					OFFSET(mount_mnt_parent));
-				mountp = ULONG(mount_buf +
-					OFFSET(mount_mnt_mountpoint));
-				get_pathname(mountp, bufp, BUFSIZE, 1,
-					parent + OFFSET(mount_mnt));
-			} else {
-				parent = ULONG(mount_buf +
-					OFFSET(vfsmount_mnt_parent));
-				mountp = ULONG(mount_buf +
-					OFFSET(vfsmount_mnt_mountpoint));
-				get_pathname(mountp, bufp, BUFSIZE, 1,
-					parent);
-			}
+		for (i = 0; i < mount_count; i++) {
+			mount_buf = mount_data + (size * i);
+			bufp = mount_path[i];
 
 			if (CRASHDEBUG(2))
 				error(INFO, "path:%s PATHEQ:%d mntp:%s\n",
@@ -385,6 +410,9 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 		if (root)
 			break;
 
+		if (!remaining_path) /* exact match for cfind */
+			break;
+
 		if ((slash_pos = strrchr(path_buf, '/')) == NULL)
 			break;
 
@@ -404,22 +432,19 @@ get_mntpoint_dentry(char *path, char **remaining_path, struct task_context *tc)
 	if (root && remaining_path)
 		*remaining_path = path_start;
 
-bail_out:
 	FREEBUF(path_buf);
-	FREEBUF(mount_buf);
-	FREEBUF(mount_list);
-
+bail_out:
 	return root;
 }
 
 static ulong
-path_to_dentry(char *path, ulong *inode, struct task_context *tc)
+path_to_dentry(char *path, ulong *inode)
 {
 	int i, count;
 	ulong *subdirs_list, root, d, dentry;
 	char *path_buf, *dentry_buf, *slash_pos, *path_start, *name;
 
-	root = get_mntpoint_dentry(path, &path_start, tc);
+	root = get_mntpoint_dentry(path, &path_start);
 	if (!root) {
 		error(INFO, "%s: mount point not found\n", path);
 		return 0;
@@ -487,6 +512,99 @@ not_found:
 	return dentry;
 }
 
+typedef struct {
+	ulong dentry;
+	char *name;
+	uint i_mode;
+} dentry_info_t;
+
+static void
+recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
+{
+	ulong *list;
+	int i, count, nr_negdents = 0;
+	char *slash;
+	ulong d, inode;
+	uint i_mode;
+	dentry_info_t *dentry_list, *p;
+
+	if (!(flags & FIND_COUNT_DENTRY))
+		fprintf(fp, "%16lx %s\n", pdentry, arg);
+
+	if (!S_ISDIR(pi_mode))
+		return;
+
+	if (!(list = get_subdirs_list(&count, pdentry))) {
+		if (flags & FIND_COUNT_DENTRY)
+			fprintf(fp, count_dentry_fmt, 0, 0, 0, arg);
+		return;
+	}
+
+	slash = (strlen(arg) == 1) ? "" : "/";
+	dentry_list = (dentry_info_t *)GETBUF(sizeof(dentry_info_t) * count);
+
+	for (i = 0, p = dentry_list; i < count; i++) {
+		d = list[i];
+		readmem(d, KVADDR, dentry_data, SIZE(dentry),
+			"dentry", FAULT_ON_ERROR);
+
+		inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
+		if (inode && get_inode_info(inode, &i_mode, NULL, NULL, NULL))
+			p->i_mode = i_mode;
+		else {
+			if (flags & FIND_COUNT_DENTRY) {
+				nr_negdents++;
+				continue;
+			}
+			if (!(flags & SHOW_INFO_NEG_DENTS))
+				continue;
+		}
+		p->dentry = d;
+		p->name = strdup(get_dentry_name(d, dentry_data));
+		p++;
+	}
+
+	if (flags & FIND_COUNT_DENTRY) {
+		fprintf(fp, count_dentry_fmt,
+			count, count - nr_negdents, nr_negdents, arg);
+		total_dentry += count;
+		total_negdent += nr_negdents;
+	}
+
+	count = p - dentry_list;
+
+	for (i = 0, p = dentry_list; i < count; i++, p++) {
+		if (S_ISDIR(p->i_mode)) {
+			char *path = GETBUF(PATH_MAX);
+			snprintf(path, PATH_MAX, "%s%s%s", arg, slash, p->name);
+
+			d = get_mntpoint_dentry(path, NULL);
+			if (d) {
+				readmem(d, KVADDR, dentry_data, SIZE(dentry),
+					"dentry", FAULT_ON_ERROR);
+
+				inode = ULONG(dentry_data +
+						OFFSET(dentry_d_inode));
+				if (inode && get_inode_info(inode, &i_mode,
+						NULL, NULL, NULL))
+					recursive_list_dir(path, d, i_mode);
+				else
+					error(INFO, "%s: invalid inode\n", path);
+			} else /* normal directory */
+				recursive_list_dir(path, p->dentry, p->i_mode);
+
+			FREEBUF(path);
+		} else if (!(flags & FIND_COUNT_DENTRY))
+			fprintf(fp, "%16lx %s%s%s\n",
+				p->dentry, arg, slash, p->name);
+
+		free(p->name);
+	}
+
+	FREEBUF(dentry_list);
+	FREEBUF(list);
+}
+
 /*
  * Currently just squeeze a series of slashes into a slash,
  * and remove the last slash.
@@ -515,7 +633,7 @@ normalize_path(char *path)
 }
 
 static void
-do_command(char *arg, struct task_context *tc)
+do_command(char *arg)
 {
 	ulong inode, i_mapping, root, dentry;
 	struct list_pair lp;
@@ -526,13 +644,13 @@ do_command(char *arg, struct task_context *tc)
 	if (flags & DUMP_CACHES)
 		inode = htol(arg, RETURN_ON_ERROR|QUIET, NULL);
 
-	if (flags & SHOW_INFO || inode == BADADDR) {
+	if (flags & (SHOW_INFO|FIND_FILES) || inode == BADADDR) {
 		if (arg[0] != '/')
 			cmd_usage(pc->curcmd, SYNOPSIS);
 
 		normalize_path(arg);
 
-		dentry = path_to_dentry(arg, &inode, tc);
+		dentry = path_to_dentry(arg, &inode);
 		if (!dentry) {
 			error(INFO, "%s: not found in dentry cache\n", arg);
 			return;
@@ -598,7 +716,59 @@ do_command(char *arg, struct task_context *tc)
 					i_mode, i_size, byte_to_page(i_size));
 			show_subdirs_info(dentry);
 		}
+	} else if (flags & FIND_FILES) {
+		if (flags & FIND_COUNT_DENTRY) {
+			fprintf(fp, count_header_fmt,
+				"TOTAL", "DENTRY", "N_DENT", "PATH");
+			total_dentry = total_negdent = 0;
+		}
+
+		recursive_list_dir(arg, dentry, i_mode);
+
+		if (flags & FIND_COUNT_DENTRY) {
+			fprintf(fp, count_dentry_fmt,
+				total_dentry, total_dentry - total_negdent,
+				total_negdent, "TOTAL");
+		}
 	}
+}
+
+static void
+init_cache(void) {
+	/* In case that the last command was interrupted. */
+	if (mount_data) {
+		mount_data = NULL;
+		mount_path = NULL;
+		mount_count = 0;
+	}
+	dentry_data = GETBUF(SIZE(dentry));
+}
+
+static void
+clear_cache(void)
+{
+	int i;
+
+	if (mount_data) {
+		FREEBUF(mount_data);
+		for (i = 0; i < mount_count; i++) {
+			FREEBUF(mount_path[i]);
+		}
+		FREEBUF(mount_path);
+		mount_data = NULL;
+		mount_path = NULL;
+		mount_count = 0;
+	}
+	FREEBUF(dentry_data);
+}
+
+static void
+set_default_task_context(void)
+{
+	ulong pid = 0;
+
+	while ((tc = pid_to_context(pid)) == NULL)
+		pid++;
 }
 
 void
@@ -606,10 +776,10 @@ cmd_ccat(void)
 {
 	int c;
 	char *arg;
-	struct task_context *tc = NULL;
 	ulong value;
 
 	flags = DUMP_CACHES;
+	tc = NULL;
 
 	while ((c = getopt(argcnt, args, "n:S")) != EOF) {
 		switch(c) {
@@ -653,8 +823,14 @@ cmd_ccat(void)
 	} else
 		outfp = fp;
 
-	do_command(arg, tc);
+	if (!tc)
+		set_default_task_context();
 
+	init_cache();
+
+	do_command(arg);
+
+	clear_cache();
 	if (outfp != fp)
 		close_tmpfile2();
 }
@@ -709,10 +885,10 @@ void
 cmd_cls(void)
 {
 	int c;
-	struct task_context *tc = NULL;
 	ulong value;
 
 	flags = SHOW_INFO;
+	tc = NULL;
 
 	while ((c = getopt(argcnt, args, "adn:U")) != EOF) {
 		switch(c) {
@@ -745,12 +921,19 @@ cmd_cls(void)
 	if (argerrs || !args[optind])
 		cmd_usage(pc->curcmd, SYNOPSIS);
 
-	do_command(args[optind++], tc);
+	if (!tc)
+		set_default_task_context();
+
+	init_cache();
+
+	do_command(args[optind++]);
 
 	while (args[optind]) {
 		fprintf(fp, "\n");
-		do_command(args[optind++], tc);
+		do_command(args[optind++]);
 	}
+
+	clear_cache();
 }
 
 char *help_cls[] = {
@@ -801,9 +984,98 @@ char *help_cls[] = {
 NULL
 };
 
+void
+cmd_cfind(void)
+{
+	int c;
+	ulong value;
+
+	flags = FIND_FILES;
+	tc = NULL;
+
+	while ((c = getopt(argcnt, args, "acn:")) != EOF) {
+		switch(c) {
+		case 'a':
+			flags |= SHOW_INFO_NEG_DENTS;
+			break;
+		case 'c':
+			flags |= FIND_COUNT_DENTRY;
+			break;
+		case 'n':
+			switch (str_to_context(optarg, &value, &tc)) {
+			case STR_PID:
+			case STR_TASK:
+				break;
+			case STR_INVALID:
+				error(FATAL, "invalid task or pid value: %s\n",
+					optarg);
+				break;
+			}
+			break;
+		default:
+			argerrs++;
+			break;
+		}
+	}
+
+	if (argerrs || !args[optind])
+		cmd_usage(pc->curcmd, SYNOPSIS);
+
+	if (!tc)
+		set_default_task_context();
+
+	init_cache();
+
+	do_command(args[optind]);
+
+	clear_cache();
+}
+
+char *help_cfind[] = {
+"cfind",
+"search for files in a directory hierarchy",
+"[-ac] [-n pid|task] abspath",
+
+"  This command searches for files in a directory hierarchy across mounted",
+"  file systems like a \"find\" command.",
+"",
+"    -a  also display negative dentries.",
+"    -c  count dentries in each directory.",
+"",
+"  For kernels supporting mount namespaces, the -n option may be used to",
+"  specify a task that has the target namespace:",
+"",
+"    -n pid   a process PID.",
+"    -n task  a hexadecimal task_struct pointer.",
+"",
+"EXAMPLE",
+"  Search for \"messages\" files through the root file system with the grep",
+"  command:",
+"",
+"    %s> cfind / | grep messages",
+"    ffff88010113be00 /var/log/messages",
+"    ffff880449f86b40 /usr/lib/python2.7/site-packages/babel/messages",
+"",
+"  Count dentries in the /boot directory and its subdirectories:",
+"",
+"    %s> cfind -c /boot",
+"      TOTAL DENTRY N_DENT PATH",
+"         18     12      6 /boot",
+"          8      6      2 /boot/grub2",
+"         34     34      0 /boot/grub2/locale",
+"        268    268      0 /boot/grub2/i386-pc",
+"          1      1      0 /boot/grub2/fonts",
+"          1      1      0 /boot/efi",
+"          2      1      1 /boot/efi/EFI",
+"          3      0      3 /boot/efi/EFI/redhat",
+"        335    323     12 TOTAL",
+NULL
+};
+
 static struct command_table_entry command_table[] = {
 	{ "ccat", cmd_ccat, help_ccat, 0},
 	{ "cls", cmd_cls, help_cls, 0},
+	{ "cfind", cmd_cfind, help_cfind, 0},
 	{ NULL },
 };
 
