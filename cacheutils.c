@@ -104,16 +104,17 @@ dump_slot(ulong slot)
 }
 
 /*
- * NOTE: Return a static address. No need to FREEBUF(), but need to
- * strdup() or strncpy() if we want to get another dentry's name with
+ * NOTE: If alloc is 0, do not strdup() and no need to free(), but
+ * need to copy the name if we want to get another dentry's name with
  * this function before consuming the former one.
  */
 static char *
-get_dentry_name(ulong dentry, char *dentry_buf)
+get_dentry_name(ulong dentry, char *dentry_buf, int alloc)
 {
 	ulong d_name_name, d_iname;
 	static char name[NAME_MAX+1];
 	static char unknown[] = "(unknown)";
+	char *name_addr;
 
 	BZERO(name, sizeof(name));
 
@@ -126,13 +127,21 @@ get_dentry_name(ulong dentry, char *dentry_buf)
 	 * See d_alloc() in the kernel.
 	 */
 	if (d_name_name == d_iname)
-		strncpy(name, dentry_buf + OFFSET(dentry_d_iname), NAME_MAX+1);
+		name_addr = dentry_buf + OFFSET(dentry_d_iname);
+	else if (readmem(d_name_name, KVADDR, name, NAME_MAX+1,
+			"dentry.d_name.name", RETURN_ON_ERROR))
+		name_addr = name;
 	else
-		if (!readmem(d_name_name, KVADDR, name, NAME_MAX+1,
-		    "dentry.d_name.name", RETURN_ON_ERROR))
-			return unknown;
+		name_addr = unknown;
 
-	return name;
+	/*
+	 * the number of malloc() via GETBUF() is limited to
+	 * MAX_MALLOC_BUFS(2000), so require strdup() here.
+	 */
+	if (alloc)
+		name_addr = strdup(name_addr);
+
+	return name_addr;
 }
 
 static int
@@ -292,7 +301,7 @@ show_subdirs_info(ulong dentry)
 				continue;
 		}
 		p->dentry = d;
-		p->name = strdup(get_dentry_name(d, dentry_buf));
+		p->name = get_dentry_name(d, dentry_buf, 1);
 		p++;
 	}
 	count = p - inode_list;
@@ -316,6 +325,7 @@ show_subdirs_info(ulong dentry)
 		} else if (flags & SHOW_INFO_NEG_DENTS)
 			fprintf(fp, negdent_fmt,
 				p->dentry, "-", "-", "-", "-", p->name);
+
 		free(p->name);
 	}
 
@@ -443,6 +453,7 @@ path_to_dentry(char *path, ulong *inode)
 	int i, count;
 	ulong *subdirs_list, root, d, dentry;
 	char *path_buf, *dentry_buf, *slash_pos, *path_start, *name;
+	size_t len;
 
 	root = get_mntpoint_dentry(path, &path_start);
 	if (!root) {
@@ -450,8 +461,9 @@ path_to_dentry(char *path, ulong *inode)
 		return 0;
 	}
 
-	path_buf = GETBUF(strlen(path_start) + 1);
-	memcpy(path_buf, path_start, strlen(path_start) + 1);
+	len = strlen(path_start);
+	path_buf = GETBUF(len + 1);
+	memcpy(path_buf, path_start, len + 1);
 	path_start = path_buf;
 
 	dentry = 0;
@@ -471,7 +483,8 @@ path_to_dentry(char *path, ulong *inode)
 			    "dentry buffer", RETURN_ON_ERROR))
 				continue;
 
-			name = get_dentry_name(d, dentry_buf);
+			/* no alloc */
+			name = get_dentry_name(d, dentry_buf, 0);
 
 			if (CRASHDEBUG(2))
 				error(INFO, "q:%s %3d: d:%lx name:%s\n",
@@ -540,7 +553,7 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 		return;
 	}
 
-	slash = (strlen(arg) == 1) ? "" : "/";
+	slash = (arg[1] == '\0') ? "" : "/";
 	dentry_list = (dentry_info_t *)GETBUF(sizeof(dentry_info_t) * count);
 
 	for (i = 0, p = dentry_list; i < count; i++) {
@@ -560,7 +573,7 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 				continue;
 		}
 		p->dentry = d;
-		p->name = strdup(get_dentry_name(d, dentry_data));
+		p->name = get_dentry_name(d, dentry_data, 1);
 		p++;
 	}
 
