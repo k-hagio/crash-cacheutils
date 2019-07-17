@@ -111,7 +111,7 @@ dump_slot(ulong slot)
 static char *
 get_dentry_name(ulong dentry, char *dentry_buf, int alloc)
 {
-	ulong d_name_name, d_iname;
+	ulong d_name_name, d_name_len, d_iname;
 	static char name[NAME_MAX+1];
 	static char unknown[] = "(unknown)";
 	char *name_addr;
@@ -120,6 +120,8 @@ get_dentry_name(ulong dentry, char *dentry_buf, int alloc)
 
 	d_name_name = ULONG(dentry_buf + OFFSET(dentry_d_name)
 					+ OFFSET(qstr_name));
+	d_name_len = UINT(dentry_buf + OFFSET(dentry_d_name)
+					+ OFFSET(qstr_len));
 	d_iname = dentry + OFFSET(dentry_d_iname);
 
 	/*
@@ -128,7 +130,7 @@ get_dentry_name(ulong dentry, char *dentry_buf, int alloc)
 	 */
 	if (d_name_name == d_iname)
 		name_addr = dentry_buf + OFFSET(dentry_d_iname);
-	else if (readmem(d_name_name, KVADDR, name, NAME_MAX+1,
+	else if (readmem(d_name_name, KVADDR, name, d_name_len + 1,
 			"dentry.d_name.name", RETURN_ON_ERROR))
 		name_addr = name;
 	else
