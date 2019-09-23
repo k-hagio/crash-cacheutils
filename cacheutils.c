@@ -36,8 +36,9 @@ void cmd_ccat(void);
 void cmd_cls(void);
 void cmd_cfind(void);
 
-#define DUMP_CACHES		(0x0001)
+#define DUMP_FILE		(0x0001)
 #define DUMP_DONT_SEEK		(0x0002)
+#define DUMP_DIRECTORY		(0x0004)
 #define SHOW_INFO		(0x0010)
 #define SHOW_INFO_DIRS		(0x0020)
 #define SHOW_INFO_NEG_DENTS	(0x0040)
@@ -56,7 +57,7 @@ static int flags;
 static FILE *outfp;
 static char *pgbuf;
 static ulong nr_written, nr_excluded;
-static ulonglong i_size;
+static ulonglong out_size;
 static struct task_context *tc;
 static int total_dentry, total_negdent;
 
@@ -90,7 +91,7 @@ dump_slot(ulong slot)
 	}
 
 	pos = index * PAGESIZE();
-	size = (pos + PAGESIZE()) > i_size ? i_size - pos : PAGESIZE();
+	size = (pos + PAGESIZE()) > out_size ? out_size - pos : PAGESIZE();
 
 	if (!(flags & DUMP_DONT_SEEK))
 		fseek(outfp, pos, SEEK_SET);
@@ -101,6 +102,51 @@ dump_slot(ulong slot)
 		error(INFO, "%lx: write error: %s\n", slot, strerror(errno));
 
 	return TRUE;
+}
+
+static void
+dump_file(char *src, char *dst, ulong i_mapping, ulonglong i_size)
+{
+	struct list_pair lp;
+	ulong root, count;
+
+	if (dst) {
+		if ((outfp = fopen(dst, "w")) == NULL) {
+			error(INFO, "%s: cannot open: %s\n",
+				dst, strerror(errno));
+			return;
+		}
+		set_tmpfile2(outfp);
+	} else
+		outfp = fp;
+
+	root = i_mapping + OFFSET(address_space_page_tree);
+	lp.value = dump_slot;
+	out_size = i_size;
+	nr_written = nr_excluded = 0;
+
+	pgbuf = GETBUF(PAGESIZE());
+
+	if (MEMBER_EXISTS("address_space", "i_pages") &&
+	    STREQ(MEMBER_TYPE_NAME("address_space", "i_pages"), "xarray"))
+		count = do_xarray(root, XARRAY_DUMP_CB, &lp);
+	else
+		count = do_radix_tree(root, RADIX_TREE_DUMP_CB, &lp);
+
+	FREEBUF(pgbuf);
+
+	if (!(flags & DUMP_DONT_SEEK))
+		ftruncate(fileno(outfp), i_size);
+
+	if (outfp != fp)
+		close_tmpfile2();
+
+	if (nr_excluded)
+		error(INFO, "%s: %lu/%lu pages excluded\n",
+			src, nr_excluded, count);
+	if (CRASHDEBUG(1))
+		error(INFO, "%s: %lu/%lu pages written\n",
+			src, nr_written, count);
 }
 
 /*
@@ -614,6 +660,83 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 	FREEBUF(list);
 }
 
+static void
+recursive_dump_dir(char *src, char *dst, ulong pdentry, uint pi_mode)
+{
+	ulong *list;
+	int i, count;
+	char *slash, *name;
+	ulong d, dentry, inode, i_mapping, nrpages;
+	ulonglong i_size;
+	uint i_mode;
+	char srcpath[PATH_MAX], dstpath[PATH_MAX];
+
+	if (CRASHDEBUG(1))
+		fprintf(fp, "create dir  %s\n", dst);
+
+	if (mkdir(dst, pi_mode) < 0) {
+		error(INFO, "%s: cannot create directory: %s\n",
+			dst, strerror(errno));
+		return;
+	}
+
+	if (!(list = get_subdirs_list(&count, pdentry))) {
+		return;
+	}
+
+	slash = (src[1] == '\0') ? "" : "/";
+
+	for (i = 0; i < count; i++) {
+		d = dentry = list[i];
+		readmem(d, KVADDR, dentry_data, SIZE(dentry), "dentry",
+			FAULT_ON_ERROR);
+
+		name = get_dentry_name(d, dentry_data, 0); /* no alloc */
+		inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
+
+		if (!inode || !get_inode_info(inode, &i_mode, &i_mapping,
+					&i_size, &nrpages))
+			continue;
+
+		snprintf(srcpath, PATH_MAX, "%s%s%s", src, slash, name);
+		snprintf(dstpath, PATH_MAX, "%s/%s", dst, name);
+
+		if (S_ISDIR(i_mode)) {
+			d = get_mntpoint_dentry(srcpath, NULL);
+			if (d) {
+				readmem(d, KVADDR, dentry_data, SIZE(dentry),
+					"dentry", FAULT_ON_ERROR);
+
+				inode = ULONG(dentry_data +
+						OFFSET(dentry_d_inode));
+				if (!inode || !get_inode_info(inode, &i_mode,
+						NULL, NULL, NULL)) {
+					error(INFO, "%s: invalid inode\n",
+						srcpath);
+					continue;
+				}
+				dentry = d;
+			}
+			recursive_dump_dir(srcpath, dstpath, dentry, i_mode);
+
+		} else if (S_ISREG(i_mode)) {
+			if (!nrpages) {
+				if (CRASHDEBUG(1))
+					fprintf(fp, "%s: no cached pages\n",
+						srcpath);
+				continue;
+			}
+
+			if (CRASHDEBUG(1))
+				fprintf(fp, "create file %s\n", dstpath);
+
+			dump_file(srcpath, dstpath, i_mapping, i_size);
+		}
+	}
+
+	FREEBUF(list);
+}
+
 /*
  * Currently just squeeze a series of slashes into a slash,
  * and remove the last slash.
@@ -642,29 +765,28 @@ normalize_path(char *path)
 }
 
 static void
-do_command(char *arg)
+do_command(char *src, char *dst)
 {
-	ulong inode, i_mapping, root, dentry;
-	struct list_pair lp;
-	ulong count, nrpages;
+	ulong inode, i_mapping, dentry, nrpages;
+	ulonglong i_size;
 	uint i_mode;
 
 	inode = dentry = 0;
-	if (flags & DUMP_CACHES)
-		inode = htol(arg, RETURN_ON_ERROR|QUIET, NULL);
+	if (flags & DUMP_FILE)
+		inode = htol(src, RETURN_ON_ERROR|QUIET, NULL);
 
-	if (flags & (SHOW_INFO|FIND_FILES) || inode == BADADDR) {
-		if (arg[0] != '/')
+	if (inode == 0 || inode == BADADDR) {
+		if (src[0] != '/')
 			cmd_usage(pc->curcmd, SYNOPSIS);
 
-		normalize_path(arg);
+		normalize_path(src);
 
-		dentry = path_to_dentry(arg, &inode);
+		dentry = path_to_dentry(src, &inode);
 		if (!dentry) {
-			error(INFO, "%s: not found in dentry cache\n", arg);
+			error(INFO, "%s: not found in dentry cache\n", src);
 			return;
 		} else if (!inode) {
-			error(INFO, "%s: negative dentry\n", arg);
+			error(INFO, "%s: negative dentry\n", src);
 			return;
 		}
 	}
@@ -672,38 +794,26 @@ do_command(char *arg)
 	if (!get_inode_info(inode, &i_mode, &i_mapping, &i_size, &nrpages))
 		return;
 
-	if (flags & DUMP_CACHES) {
+	if (flags & DUMP_FILE) {
 		if (!S_ISREG(i_mode)) {
-			error(INFO, "%s: not regular file\n", arg);
+			error(INFO, "%s: not regular file\n", src);
 			return;
 		} else if (!nrpages) {
-			error(INFO, "%s: no page caches\n", arg);
+			error(INFO, "%s: no cached page\n", src);
 			return;
 		}
 
-		root = i_mapping + OFFSET(address_space_page_tree);
-		lp.value = dump_slot;
-		nr_written = nr_excluded = 0;
+		dump_file(src, dst, i_mapping, i_size);
 
-		pgbuf = GETBUF(PAGESIZE());
+	} else if (flags & DUMP_DIRECTORY) {
+		if (!S_ISDIR(i_mode)) {
+			error(INFO, "%s: not directory\n", src);
+			return;
+		}
 
-		if (MEMBER_EXISTS("address_space", "i_pages") &&
-		    STREQ(MEMBER_TYPE_NAME("address_space", "i_pages"), "xarray"))
-			count = do_xarray(root, XARRAY_DUMP_CB, &lp);
-		else
-			count = do_radix_tree(root, RADIX_TREE_DUMP_CB, &lp);
-
-		FREEBUF(pgbuf);
-
-		if (!(flags & DUMP_DONT_SEEK))
-			ftruncate(fileno(outfp), i_size);
-
-		if (nr_excluded)
-			error(INFO, "%lu/%lu pages excluded\n",
-				nr_excluded, count);
-		if (CRASHDEBUG(1))
-			error(INFO, "%lu/%lu pages written\n",
-				nr_written, count);
+		fprintf(fp, "Extracting %s to %s...\n", src, dst);
+		recursive_dump_dir(src, dst, dentry, i_mode);
+		fprintf(fp, "done.\n");
 
 	} else if (flags & SHOW_INFO) {
 		fprintf(fp, header_fmt, "DENTRY", "INODE", "I_MAPPING",
@@ -713,7 +823,7 @@ do_command(char *arg)
 
 		if (flags & SHOW_INFO_DIRS || !S_ISDIR(i_mode)) {
 			fprintf(fp, dentry_fmt, dentry, inode, i_mapping,
-				nrpages, pct, arg, get_type_indicator(i_mode));
+				nrpages, pct, src, get_type_indicator(i_mode));
 			if (CRASHDEBUG(1))
 				fprintf(fp, "  i_mode:%6o i_size:%llu (%llu)\n",
 					i_mode, i_size, byte_to_page(i_size));
@@ -732,7 +842,7 @@ do_command(char *arg)
 			total_dentry = total_negdent = 0;
 		}
 
-		recursive_list_dir(arg, dentry, i_mode);
+		recursive_list_dir(src, dentry, i_mode);
 
 		if (flags & FIND_COUNT_DENTRY) {
 			fprintf(fp, count_dentry_fmt,
@@ -784,14 +894,18 @@ void
 cmd_ccat(void)
 {
 	int c;
-	char *arg;
+	char *src, *dst;
 	ulong value;
 
-	flags = DUMP_CACHES;
+	flags = DUMP_FILE;
 	tc = NULL;
 
-	while ((c = getopt(argcnt, args, "n:S")) != EOF) {
+	while ((c = getopt(argcnt, args, "dn:S")) != EOF) {
 		switch(c) {
+		case 'd':
+			flags &= ~DUMP_FILE; /* exclusive */
+			flags |= DUMP_DIRECTORY;
+			break;
 		case 'n':
 			switch (str_to_context(optarg, &value, &tc)) {
 			case STR_PID:
@@ -815,49 +929,49 @@ cmd_ccat(void)
 	if (argerrs || !args[optind])
 		cmd_usage(pc->curcmd, SYNOPSIS);
 
-	arg = args[optind++];
+	src = args[optind++];
+	dst = args[optind];
 
-	if (args[optind]) {
-		if (access(args[optind], F_OK) == 0) {
-			error(INFO, "%s: %s\n",
-				args[optind], strerror(EEXIST));
+	if (dst) {
+		if (dst[0] == '\0')
+			cmd_usage(pc->curcmd, SYNOPSIS);
+
+		normalize_path(dst);
+
+		if (access(dst, F_OK) == 0) {
+			error(INFO, "%s: %s\n", dst, strerror(EEXIST));
 			return;
 		}
-		if ((outfp = fopen(args[optind], "w")) == NULL) {
-			error(INFO, "cannot open %s: %s\n",
-				args[optind], strerror(errno));
-			return;
-		}
-		set_tmpfile2(outfp);
-	} else
-		outfp = fp;
+	} else if (flags & DUMP_DIRECTORY)
+		cmd_usage(pc->curcmd, SYNOPSIS);
 
 	if (!tc)
 		set_default_task_context();
 
 	init_cache();
 
-	do_command(arg);
+	do_command(src, dst);
 
 	clear_cache();
-	if (outfp != fp)
-		close_tmpfile2();
 }
 
 char *help_ccat[] = {
 "ccat",				/* command name */
 "dump page caches",		/* short description */
-"[-S] [-n pid|task] inode|abspath [outfile]",
+"   [-S] [-n pid|task] abspath|inode [outfile]\n"
+"  ccat -d [-S] [-n pid|task] abspath outdir",
 				/* argument synopsis, or " " if none */
 "  This command dumps the page caches of a specified inode or path like",
 "  \"cat\" command.",
 "",
+"       -d  extract a directory including its contents to outdir.",
 "       -S  do not fseek() and ftruncate() to outfile in order to",
 "           create a non-sparse file.",
 "    inode  a hexadecimal inode pointer.",
-"  abspath  an absolute path.",
+"  abspath  the absolute path of a file (or directory with the -d option).",
 "  outfile  a file path to be written. If a file already exists there,",
 "           the command fails.",
+"   outdir  a directory path to be created by the -d option.",
 "",
 "  For kernels supporting mount namespaces, the -n option may be used to",
 "  specify a task that has the target namespace:",
@@ -935,11 +1049,11 @@ cmd_cls(void)
 
 	init_cache();
 
-	do_command(args[optind++]);
+	do_command(args[optind++], NULL);
 
 	while (args[optind]) {
 		fprintf(fp, "\n");
-		do_command(args[optind++]);
+		do_command(args[optind++], NULL);
 	}
 
 	clear_cache();
@@ -1035,7 +1149,7 @@ cmd_cfind(void)
 
 	init_cache();
 
-	do_command(args[optind]);
+	do_command(args[optind], NULL);
 
 	clear_cache();
 }
