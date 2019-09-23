@@ -150,14 +150,11 @@ static int
 get_inode_info(ulong inode, uint *i_mode, ulong *i_mapping,
 		ulonglong *i_size, ulong *nrpages)
 {
-	char *inode_buf;
-	int ret = FALSE;
-
-	inode_buf = GETBUF(SIZE(inode));
+	char inode_buf[SIZE(inode)];
 
 	if (!readmem(inode, KVADDR, inode_buf, SIZE(inode),
 	    "inode buffer", RETURN_ON_ERROR))
-		goto bail_out;
+		return FALSE;
 
 	if (i_mode) {
 		if (SIZE(umode_t) == SIZEOF_32BIT)
@@ -169,16 +166,14 @@ get_inode_info(ulong inode, uint *i_mode, ulong *i_mapping,
 		*i_mapping = ULONG(inode_buf + OFFSET(inode_i_mapping));
 	if (i_size)
 		*i_size = ULONGLONG(inode_buf + CU_OFFSET(inode_i_size));
-	if (nrpages)
+	if (nrpages) {
 		if (!readmem(*i_mapping + OFFSET(address_space_nrpages),
 		    KVADDR, nrpages, sizeof(ulong), "i_mapping.nrpages",
 		    RETURN_ON_ERROR))
-			goto bail_out;
+			return FALSE;
+	}
 
-	ret = TRUE;
-bail_out:
-	FREEBUF(inode_buf);
-	return ret;
+	return TRUE;
 }
 
 static ulong *
@@ -590,7 +585,7 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 
 	for (i = 0, p = dentry_list; i < count; i++, p++) {
 		if (S_ISDIR(p->i_mode)) {
-			char *path = GETBUF(PATH_MAX);
+			char path[PATH_MAX];
 			snprintf(path, PATH_MAX, "%s%s%s", arg, slash, p->name);
 
 			d = get_mntpoint_dentry(path, NULL);
@@ -608,7 +603,6 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 			} else /* normal directory */
 				recursive_list_dir(path, p->dentry, p->i_mode);
 
-			FREEBUF(path);
 		} else if (!(flags & FIND_COUNT_DENTRY))
 			fprintf(fp, "%16lx %s%s%s\n",
 				p->dentry, arg, slash, p->name);
