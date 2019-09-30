@@ -84,18 +84,21 @@ NAME
   ccat - dump page caches
 
 SYNOPSIS
-  ccat [-S] [-n pid|task] inode|abspath [outfile]
+  ccat    [-S] [-n pid|task] abspath|inode [outfile]
+  ccat -d [-S] [-n pid|task] abspath outdir
 
 DESCRIPTION
   This command dumps the page caches of a specified inode or path like
   "cat" command.
 
+       -d  extract a directory and its contents to outdir.
        -S  do not fseek() and ftruncate() to outfile in order to
            create a non-sparse file.
     inode  a hexadecimal inode pointer.
-  abspath  an absolute path.
+  abspath  the absolute path of a file (or directory with the -d option).
   outfile  a file path to be written. If a file already exists there,
            the command fails.
+   outdir  a directory path to be created by the -d option.
 
   For kernels supporting mount namespaces, the -n option may be used to
   specify a task that has the target namespace:
@@ -125,6 +128,11 @@ EXAMPLE
 
   NOTE: Redirecting to a file will also works, but it can includes crash's
   messages, so specifying an outfile is recommended for restoring a file.
+
+  Extract the "/var/log" directory and its contents to the new "/tmp/log"
+  directory with one command:
+
+    crash> ccat -d /var/log /tmp/log
 ```
 ```
 NAME

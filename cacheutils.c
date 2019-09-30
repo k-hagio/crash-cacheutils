@@ -36,8 +36,9 @@ void cmd_ccat(void);
 void cmd_cls(void);
 void cmd_cfind(void);
 
-#define DUMP_CACHES		(0x0001)
+#define DUMP_FILE		(0x0001)
 #define DUMP_DONT_SEEK		(0x0002)
+#define DUMP_DIRECTORY		(0x0004)
 #define SHOW_INFO		(0x0010)
 #define SHOW_INFO_DIRS		(0x0020)
 #define SHOW_INFO_NEG_DENTS	(0x0040)
@@ -659,6 +660,83 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 	FREEBUF(list);
 }
 
+static void
+recursive_dump_dir(char *src, char *dst, ulong pdentry, uint pi_mode)
+{
+	ulong *list;
+	int i, count;
+	char *slash, *name;
+	ulong d, dentry, inode, i_mapping, nrpages;
+	ulonglong i_size;
+	uint i_mode;
+	char srcpath[PATH_MAX], dstpath[PATH_MAX];
+
+	if (CRASHDEBUG(1))
+		fprintf(fp, "create dir  %s\n", dst);
+
+	if (mkdir(dst, pi_mode) < 0) {
+		error(INFO, "%s: cannot create directory: %s\n",
+			dst, strerror(errno));
+		return;
+	}
+
+	if (!(list = get_subdirs_list(&count, pdentry))) {
+		return;
+	}
+
+	slash = (src[1] == '\0') ? "" : "/";
+
+	for (i = 0; i < count; i++) {
+		d = dentry = list[i];
+		readmem(d, KVADDR, dentry_data, SIZE(dentry), "dentry",
+			FAULT_ON_ERROR);
+
+		name = get_dentry_name(d, dentry_data, 0); /* no alloc */
+		inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
+
+		if (!inode || !get_inode_info(inode, &i_mode, &i_mapping,
+					&i_size, &nrpages))
+			continue;
+
+		snprintf(srcpath, PATH_MAX, "%s%s%s", src, slash, name);
+		snprintf(dstpath, PATH_MAX, "%s/%s", dst, name);
+
+		if (S_ISDIR(i_mode)) {
+			d = get_mntpoint_dentry(srcpath, NULL);
+			if (d) {
+				readmem(d, KVADDR, dentry_data, SIZE(dentry),
+					"dentry", FAULT_ON_ERROR);
+
+				inode = ULONG(dentry_data +
+						OFFSET(dentry_d_inode));
+				if (!inode || !get_inode_info(inode, &i_mode,
+						NULL, NULL, NULL)) {
+					error(INFO, "%s: invalid inode\n",
+						srcpath);
+					continue;
+				}
+				dentry = d;
+			}
+			recursive_dump_dir(srcpath, dstpath, dentry, i_mode);
+
+		} else if (S_ISREG(i_mode)) {
+			if (!nrpages) {
+				if (CRASHDEBUG(1))
+					fprintf(fp, "%s: no cached pages\n",
+						srcpath);
+				continue;
+			}
+
+			if (CRASHDEBUG(1))
+				fprintf(fp, "create file %s\n", dstpath);
+
+			dump_file(srcpath, dstpath, i_mapping, i_size);
+		}
+	}
+
+	FREEBUF(list);
+}
+
 /*
  * Currently just squeeze a series of slashes into a slash,
  * and remove the last slash.
@@ -694,10 +772,10 @@ do_command(char *src, char *dst)
 	uint i_mode;
 
 	inode = dentry = 0;
-	if (flags & DUMP_CACHES)
+	if (flags & DUMP_FILE)
 		inode = htol(src, RETURN_ON_ERROR|QUIET, NULL);
 
-	if (flags & (SHOW_INFO|FIND_FILES) || inode == BADADDR) {
+	if (inode == 0 || inode == BADADDR) {
 		if (src[0] != '/')
 			cmd_usage(pc->curcmd, SYNOPSIS);
 
@@ -716,16 +794,26 @@ do_command(char *src, char *dst)
 	if (!get_inode_info(inode, &i_mode, &i_mapping, &i_size, &nrpages))
 		return;
 
-	if (flags & DUMP_CACHES) {
+	if (flags & DUMP_FILE) {
 		if (!S_ISREG(i_mode)) {
 			error(INFO, "%s: not regular file\n", src);
 			return;
 		} else if (!nrpages) {
-			error(INFO, "%s: no page caches\n", src);
+			error(INFO, "%s: no cached pages\n", src);
 			return;
 		}
 
 		dump_file(src, dst, i_mapping, i_size);
+
+	} else if (flags & DUMP_DIRECTORY) {
+		if (!S_ISDIR(i_mode)) {
+			error(INFO, "%s: not directory\n", src);
+			return;
+		}
+
+		fprintf(fp, "Extracting %s to %s...\n", src, dst);
+		recursive_dump_dir(src, dst, dentry, i_mode);
+		fprintf(fp, "done.\n");
 
 	} else if (flags & SHOW_INFO) {
 		fprintf(fp, header_fmt, "DENTRY", "INODE", "I_MAPPING",
@@ -809,11 +897,15 @@ cmd_ccat(void)
 	char *src, *dst;
 	ulong value;
 
-	flags = DUMP_CACHES;
+	flags = DUMP_FILE;
 	tc = NULL;
 
-	while ((c = getopt(argcnt, args, "n:S")) != EOF) {
+	while ((c = getopt(argcnt, args, "dn:S")) != EOF) {
 		switch(c) {
+		case 'd':
+			flags &= ~DUMP_FILE; /* exclusive */
+			flags |= DUMP_DIRECTORY;
+			break;
 		case 'n':
 			switch (str_to_context(optarg, &value, &tc)) {
 			case STR_PID:
@@ -850,7 +942,8 @@ cmd_ccat(void)
 			error(INFO, "%s: %s\n", dst, strerror(EEXIST));
 			return;
 		}
-	}
+	} else if (flags & DUMP_DIRECTORY)
+		cmd_usage(pc->curcmd, SYNOPSIS);
 
 	if (!tc)
 		set_default_task_context();
@@ -865,17 +958,20 @@ cmd_ccat(void)
 char *help_ccat[] = {
 "ccat",				/* command name */
 "dump page caches",		/* short description */
-"[-S] [-n pid|task] inode|abspath [outfile]",
+"   [-S] [-n pid|task] abspath|inode [outfile]\n"
+"  ccat -d [-S] [-n pid|task] abspath outdir",
 				/* argument synopsis, or " " if none */
 "  This command dumps the page caches of a specified inode or path like",
 "  \"cat\" command.",
 "",
+"       -d  extract a directory and its contents to outdir.",
 "       -S  do not fseek() and ftruncate() to outfile in order to",
 "           create a non-sparse file.",
 "    inode  a hexadecimal inode pointer.",
-"  abspath  an absolute path.",
+"  abspath  the absolute path of a file (or directory with the -d option).",
 "  outfile  a file path to be written. If a file already exists there,",
 "           the command fails.",
+"   outdir  a directory path to be created by the -d option.",
 "",
 "  For kernels supporting mount namespaces, the -n option may be used to",
 "  specify a task that has the target namespace:",
@@ -905,6 +1001,11 @@ char *help_ccat[] = {
 "",
 "  NOTE: Redirecting to a file will also works, but it can includes crash's",
 "  messages, so specifying an outfile is recommended for restoring a file.",
+"",
+"  Extract the \"/var/log\" directory and its contents to the new \"/tmp/log\"",
+"  directory with one command:",
+"",
+"    %s> ccat -d /var/log /tmp/log",
 NULL
 };
 
