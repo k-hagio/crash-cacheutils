@@ -660,8 +660,10 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 	FREEBUF(list);
 }
 
+#define MODE_RWX (S_IRWXU|S_IRWXG|S_IRWXO)
+
 static void
-recursive_dump_dir(char *src, char *dst, ulong pdentry, uint pi_mode)
+recursive_dump_dir(char *src, char *dst, ulong pdentry)
 {
 	ulong *list;
 	int i, count;
@@ -674,7 +676,7 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry, uint pi_mode)
 	if (CRASHDEBUG(1))
 		fprintf(fp, "create dir  %s\n", dst);
 
-	if (mkdir(dst, pi_mode) < 0) {
+	if (mkdir(dst, MODE_RWX) < 0) {
 		error(INFO, "%s: cannot create directory: %s\n",
 			dst, strerror(errno));
 		return;
@@ -717,7 +719,7 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry, uint pi_mode)
 				}
 				dentry = d;
 			}
-			recursive_dump_dir(srcpath, dstpath, dentry, i_mode);
+			recursive_dump_dir(srcpath, dstpath, dentry);
 
 		} else if (S_ISREG(i_mode)) {
 			if (!nrpages) {
@@ -812,7 +814,7 @@ do_command(char *src, char *dst)
 		}
 
 		fprintf(fp, "Extracting %s to %s...\n", src, dst);
-		recursive_dump_dir(src, dst, dentry, i_mode);
+		recursive_dump_dir(src, dst, dentry);
 		fprintf(fp, "done.\n");
 
 	} else if (flags & SHOW_INFO) {
