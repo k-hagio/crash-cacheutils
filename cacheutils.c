@@ -819,25 +819,25 @@ do_command(char *src, char *dst)
 		fprintf(fp, "done.\n");
 
 	} else if (flags & SHOW_INFO) {
+		int pct = calc_cached_percent(nrpages, i_size);
+		char *name = src;
+
 		fprintf(fp, header_fmt, "DENTRY", "INODE", "I_MAPPING",
 			"NRPAGES", "%", "PATH");
 
-		int pct = calc_cached_percent(nrpages, i_size);
+		if (S_ISDIR(i_mode) && !(flags & SHOW_INFO_DIRS))
+			name = ".";
 
-		if (flags & SHOW_INFO_DIRS || !S_ISDIR(i_mode)) {
-			fprintf(fp, dentry_fmt, dentry, inode, i_mapping,
-				nrpages, pct, src, get_type_indicator(i_mode));
-			if (CRASHDEBUG(1))
-				fprintf(fp, "  i_mode:%6o i_size:%llu (%llu)\n",
-					i_mode, i_size, byte_to_page(i_size));
-		} else {
-			fprintf(fp, dentry_fmt, dentry, inode, i_mapping,
-				nrpages, pct, ".", get_type_indicator(i_mode));
-			if (CRASHDEBUG(1))
-				fprintf(fp, "  i_mode:%6o i_size:%llu (%llu)\n",
-					i_mode, i_size, byte_to_page(i_size));
+		fprintf(fp, dentry_fmt, dentry, inode, i_mapping,
+			nrpages, pct, name, get_type_indicator(i_mode));
+
+		if (CRASHDEBUG(1))
+			fprintf(fp, "  i_mode:%6o i_size:%llu (%llu)\n",
+				i_mode, i_size, byte_to_page(i_size));
+
+		if (S_ISDIR(i_mode) && !(flags & SHOW_INFO_DIRS))
 			show_subdirs_info(dentry);
-		}
+
 	} else if (flags & FIND_FILES) {
 		if (flags & FIND_COUNT_DENTRY) {
 			fprintf(fp, count_header_fmt,
