@@ -24,6 +24,7 @@
 
 struct cu_offset_table {
 	long inode_i_size;
+	long inode_i_mtime;
 	long vfsmount_mnt_root;
 	long dentry_d_subdirs;
 	long dentry_d_child;
@@ -44,15 +45,22 @@ void cmd_cfind(void);
 #define SHOW_INFO_DIRS		(0x0020)
 #define SHOW_INFO_NEG_DENTS	(0x0040)
 #define SHOW_INFO_DONT_SORT	(0x0080)
-#define FIND_FILES		(0x0100)
-#define FIND_COUNT_DENTRY	(0x0200)
+#define SHOW_INFO_LONG		(0x0100)
+#define FIND_FILES		(0x1000)
+#define FIND_COUNT_DENTRY	(0x2000)
 
 /* for env_flags */
 #define XARRAY			(0x0001)
+#define TIMESPEC64		(0x0002)
 
-static char *header_fmt = "%-16s %-16s %-16s %7s %3s %s\n";
-static char *dentry_fmt = "%-16lx %-16lx %-16lx %7lu %3d %s%s\n";
-static char *negdent_fmt = "%-16lx %-16s %-16s %7s %3s %s\n";
+/* Output formats */
+static char *header_fmt   = "%-16s %-16s %7s %3s %s\n";
+static char *header_lfmt  = "%-16s %-16s %7s %3s %6s %11s %-29s %s\n";
+static char *dentry_fmt   = "%-16lx %-16lx %7lu %3d %s%s\n";
+static char *dentry_lfmt  = "%-16lx %-16lx %7lu %3d %6o %11llu %29s %s%s\n";
+static char *negdent_fmt  = "%-16lx %-16s %7s %3s %s\n";
+static char *negdent_lfmt = "%-16lx %-16s %7s %3s %6s %11s %-29s %s\n";
+
 static char *count_header_fmt = "%7s %6s %6s %s\n";
 static char *count_dentry_fmt = "%7d %6d %6d %s\n";
 
@@ -195,7 +203,7 @@ get_dentry_name(ulong dentry, char *dentry_buf, int alloc)
 
 static int
 get_inode_info(ulong inode, uint *i_mode, ulong *i_mapping,
-		ulonglong *i_size, ulong *nrpages)
+		ulonglong *i_size, ulong *nrpages, struct timespec *i_mtime)
 {
 	char inode_buf[SIZE(inode)];
 
@@ -218,6 +226,25 @@ get_inode_info(ulong inode, uint *i_mode, ulong *i_mapping,
 		    KVADDR, nrpages, sizeof(ulong), "i_mapping.nrpages",
 		    RETURN_ON_ERROR))
 			return FALSE;
+	}
+	if (i_mtime) {
+		/*
+		 * There are some dirty assumptions and kludges here
+		 * for some reasons I can't explain :)
+		 */
+		if (env_flags & TIMESPEC64) {
+			i_mtime->tv_sec = (long)ULONGLONG(inode_buf
+						+ CU_OFFSET(inode_i_mtime));
+			i_mtime->tv_nsec = LONG(inode_buf
+						+ CU_OFFSET(inode_i_mtime)
+						+ sizeof(long long));
+		} else {
+			i_mtime->tv_sec = LONG(inode_buf
+						+ CU_OFFSET(inode_i_mtime));
+			i_mtime->tv_nsec = LONG(inode_buf
+						+ CU_OFFSET(inode_i_mtime)
+						+ sizeof(long));
+		}
 	}
 
 	return TRUE;
@@ -277,6 +304,25 @@ get_type_indicator(uint i_mode)
 	return c;
 }
 
+#define TIME_LEN	30
+static char *
+get_strtime(struct timespec *ts)
+{
+	static char buf[TIME_LEN];
+	static char na[2] = {'-', '\0'};
+	size_t ret;
+
+	ret = strftime(buf, TIME_LEN, "%F.%T", localtime(&ts->tv_sec));
+	if (!ret)
+		return na;
+
+	ret = snprintf(buf + ret, TIME_LEN - ret, ".%09ld", ts->tv_nsec);
+	if (ret < 0)
+		return na;
+
+	return buf;
+}
+
 static ulonglong
 byte_to_page(ulonglong i_size)
 {
@@ -300,6 +346,7 @@ typedef struct {
 	ulonglong i_size;
 	ulong nrpages;
 	uint i_mode;
+	struct timespec i_mtime;
 } inode_info_t;
 
 static int
@@ -321,6 +368,7 @@ show_subdirs_info(ulong dentry)
 	uint i_mode;
 	ulonglong i_size;
 	inode_info_t *inode_list, *p;
+	struct timespec i_mtime;
 
 	if (!(list = get_subdirs_list(&count, dentry)))
 		return;
@@ -333,12 +381,14 @@ show_subdirs_info(ulong dentry)
 
 		inode = ULONG(dentry_buf + OFFSET(dentry_d_inode));
 		if (inode && get_inode_info(inode, &i_mode, &i_mapping,
-					&i_size, &nrpages)) {
+					&i_size, &nrpages, &i_mtime)) {
 			p->inode = inode;
 			p->i_mapping = i_mapping;
 			p->i_size = i_size;
 			p->nrpages = nrpages;
 			p->i_mode = i_mode;
+			p->i_mtime.tv_sec = i_mtime.tv_sec;
+			p->i_mtime.tv_nsec = i_mtime.tv_nsec;
 		} else {
 			p->i_mapping = 0;
 			if (!(flags & SHOW_INFO_NEG_DENTS))
@@ -357,18 +407,33 @@ show_subdirs_info(ulong dentry)
 		if (p->i_mapping) {
 			int pct = calc_cached_percent(p->nrpages, p->i_size);
 
-			fprintf(fp, dentry_fmt, p->dentry, p->inode,
-				p->i_mapping, p->nrpages, pct, p->name,
-				get_type_indicator(p->i_mode));
+			if (flags & SHOW_INFO_LONG) {
+				fprintf(fp, dentry_lfmt, p->dentry, p->inode,
+					p->nrpages, pct, p->i_mode, p->i_size,
+					get_strtime(&p->i_mtime), p->name,
+					get_type_indicator(p->i_mode));
+				if (CRASHDEBUG(1))
+					fprintf(fp,
+				    "  i_mapping:%-16lx i_mtime:%ld.%09ld\n",
+						p->i_mapping, p->i_mtime.tv_sec,
+						p->i_mtime.tv_nsec);
+			} else {
+				fprintf(fp, dentry_fmt, p->dentry, p->inode,
+					p->nrpages, pct, p->name,
+					get_type_indicator(p->i_mode));
+				if (CRASHDEBUG(1))
+					fprintf(fp, "  i_mapping:%-16lx\n",
+						p->i_mapping);
+			}
 
-			if (CRASHDEBUG(1))
-				fprintf(fp, "  i_mode:%6o i_size:%llu (%llu)\n",
-					p->i_mode, p->i_size,
-					byte_to_page(p->i_size));
-
-		} else if (flags & SHOW_INFO_NEG_DENTS)
-			fprintf(fp, negdent_fmt,
-				p->dentry, "-", "-", "-", "-", p->name);
+		} else if (flags & SHOW_INFO_NEG_DENTS) {
+			if (flags & SHOW_INFO_LONG)
+				fprintf(fp, negdent_lfmt, p->dentry, "-",
+					"-", "-", "-", "-", "-", p->name);
+			else
+				fprintf(fp, negdent_fmt, p->dentry, "-",
+					"-", "-", p->name);
+		}
 
 		free(p->name);
 	}
@@ -606,7 +671,8 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 			"dentry", FAULT_ON_ERROR);
 
 		inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
-		if (inode && get_inode_info(inode, &i_mode, NULL, NULL, NULL))
+		if (inode && get_inode_info(inode, &i_mode, NULL, NULL, NULL,
+					NULL))
 			p->i_mode = i_mode;
 		else {
 			if (flags & FIND_COUNT_DENTRY) {
@@ -643,7 +709,7 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 				inode = ULONG(dentry_data +
 						OFFSET(dentry_d_inode));
 				if (inode && get_inode_info(inode, &i_mode,
-						NULL, NULL, NULL))
+						NULL, NULL, NULL, NULL))
 					recursive_list_dir(path, d, i_mode);
 				else
 					error(INFO, "%s: invalid inode\n", path);
@@ -698,7 +764,7 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 		inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
 
 		if (!inode || !get_inode_info(inode, &i_mode, &i_mapping,
-					&i_size, &nrpages))
+					&i_size, &nrpages, NULL))
 			continue;
 
 		snprintf(srcpath, PATH_MAX, "%s%s%s", src, slash, name);
@@ -713,7 +779,7 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 				inode = ULONG(dentry_data +
 						OFFSET(dentry_d_inode));
 				if (!inode || !get_inode_info(inode, &i_mode,
-						NULL, NULL, NULL)) {
+						NULL, NULL, NULL, NULL)) {
 					error(INFO, "%s: invalid inode\n",
 						srcpath);
 					continue;
@@ -773,6 +839,7 @@ do_command(char *src, char *dst)
 	ulong inode, i_mapping, dentry, nrpages;
 	ulonglong i_size;
 	uint i_mode;
+	struct timespec i_mtime;
 
 	inode = dentry = 0;
 	if (flags & DUMP_FILE)
@@ -794,7 +861,8 @@ do_command(char *src, char *dst)
 		}
 	}
 
-	if (!get_inode_info(inode, &i_mode, &i_mapping, &i_size, &nrpages))
+	if (!get_inode_info(inode, &i_mode, &i_mapping, &i_size, &nrpages,
+				&i_mtime))
 		return;
 
 	if (flags & DUMP_FILE) {
@@ -822,18 +890,28 @@ do_command(char *src, char *dst)
 		int pct = calc_cached_percent(nrpages, i_size);
 		char *name = src;
 
-		fprintf(fp, header_fmt, "DENTRY", "INODE", "I_MAPPING",
-			"NRPAGES", "%", "PATH");
-
 		if (S_ISDIR(i_mode) && !(flags & SHOW_INFO_DIRS))
 			name = ".";
 
-		fprintf(fp, dentry_fmt, dentry, inode, i_mapping,
-			nrpages, pct, name, get_type_indicator(i_mode));
-
-		if (CRASHDEBUG(1))
-			fprintf(fp, "  i_mode:%6o i_size:%llu (%llu)\n",
-				i_mode, i_size, byte_to_page(i_size));
+		if (flags & SHOW_INFO_LONG) {
+			fprintf(fp, header_lfmt, "DENTRY", "INODE", "NRPAGES",
+				"%", "MODE", "SIZE", "MTIME", "PATH");
+			fprintf(fp, dentry_lfmt, dentry, inode, nrpages,
+				pct, i_mode, i_size, get_strtime(&i_mtime),
+				name, get_type_indicator(i_mode));
+			if (CRASHDEBUG(1))
+				fprintf(fp,
+				    "  i_mapping:%-16lx i_mtime:%ld.%09ld\n",
+					i_mapping, i_mtime.tv_sec,
+					i_mtime.tv_nsec);
+		} else {
+			fprintf(fp, header_fmt, "DENTRY", "INODE", "NRPAGES",
+				"%", "PATH");
+			fprintf(fp, dentry_fmt, dentry, inode, nrpages,
+				pct, name, get_type_indicator(i_mode));
+			if (CRASHDEBUG(1))
+				fprintf(fp, "  i_mapping:%-16lx\n", i_mapping);
+		}
 
 		if (S_ISDIR(i_mode) && !(flags & SHOW_INFO_DIRS))
 			show_subdirs_info(dentry);
@@ -1023,13 +1101,16 @@ cmd_cls(void)
 	flags = SHOW_INFO;
 	tc = NULL;
 
-	while ((c = getopt(argcnt, args, "adn:U")) != EOF) {
+	while ((c = getopt(argcnt, args, "adln:U")) != EOF) {
 		switch(c) {
 		case 'a':
 			flags |= SHOW_INFO_NEG_DENTS;
 			break;
 		case 'd':
 			flags |= SHOW_INFO_DIRS;
+			break;
+		case 'l':
+			flags |= SHOW_INFO_LONG;
 			break;
 		case 'n':
 			switch (str_to_context(optarg, &value, &tc)) {
@@ -1222,6 +1303,7 @@ cacheutils_init(void)
 	register_extension(command_table);
 
 	CU_OFFSET_INIT(inode_i_size, "inode", "i_size");
+	CU_OFFSET_INIT(inode_i_mtime, "inode", "i_mtime");
 	CU_OFFSET_INIT(vfsmount_mnt_root, "vfsmount", "mnt_root");
 	CU_OFFSET_INIT(dentry_d_subdirs, "dentry", "d_subdirs");
 	CU_OFFSET_INIT(dentry_d_child, "dentry", "d_child");
@@ -1232,10 +1314,16 @@ cacheutils_init(void)
 	    STREQ(MEMBER_TYPE_NAME("address_space", "i_pages"), "xarray"))
 		env_flags |= XARRAY;
 
+	if (MEMBER_EXISTS("inode", "i_mtime") &&
+	    STREQ(MEMBER_TYPE_NAME("inode", "i_mtime"), "timespec64"))
+		env_flags |= TIMESPEC64;
+
 	if (CRASHDEBUG(1)) {
 		fprintf(fp, "          env_flags: 0x%x", env_flags);
 		fprintf(fp, " %s", (env_flags & XARRAY) ?
 					"XARRAY" : "RADIX_TREE");
+		fprintf(fp, " %s", (env_flags & TIMESPEC64) ?
+					"TIMESPEC64" : "TIMESPEC");
 		fprintf(fp, "\n");
 
 		fprintf(fp, "       inode_i_size: %lu\n",
