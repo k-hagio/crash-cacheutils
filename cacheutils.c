@@ -60,17 +60,18 @@ static char *count_dentry_fmt = "%7d %6d %6d %s\n";
 static int flags;
 static int env_flags;
 static FILE *outfp;
-static char *pgbuf;
 static ulong nr_written, nr_excluded;
 static ulonglong out_size;
 static struct task_context *tc;
 static int total_dentry, total_negdent;
 
-/* Per-command caches */
+/* Per-command caches and buffers */
 static int mount_count;
 static char *mount_data;
 static char **mount_path;
+
 static char *dentry_data;
+static char *pgbuf;
 
 static int
 dump_slot(ulong slot)
@@ -130,14 +131,10 @@ dump_file(char *src, char *dst, ulong i_mapping, ulonglong i_size)
 	out_size = i_size;
 	nr_written = nr_excluded = 0;
 
-	pgbuf = GETBUF(PAGESIZE());
-
 	if (env_flags & XARRAY)
 		count = do_xarray(root, XARRAY_DUMP_CB, &lp);
 	else
 		count = do_radix_tree(root, RADIX_TREE_DUMP_CB, &lp);
-
-	FREEBUF(pgbuf);
 
 	if (!(flags & DUMP_DONT_SEEK))
 		ftruncate(fileno(outfp), i_size);
@@ -867,6 +864,7 @@ init_cache(void) {
 		mount_count = 0;
 	}
 	dentry_data = GETBUF(SIZE(dentry));
+	pgbuf = GETBUF(PAGESIZE());
 }
 
 static void
@@ -885,6 +883,7 @@ clear_cache(void)
 		mount_count = 0;
 	}
 	FREEBUF(dentry_data);
+	FREEBUF(pgbuf);
 }
 
 static void
