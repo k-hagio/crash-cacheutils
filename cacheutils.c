@@ -36,6 +36,7 @@ void cmd_ccat(void);
 void cmd_cls(void);
 void cmd_cfind(void);
 
+/* for flags */
 #define DUMP_FILE		(0x0001)
 #define DUMP_DONT_SEEK		(0x0002)
 #define DUMP_DIRECTORY		(0x0004)
@@ -46,6 +47,9 @@ void cmd_cfind(void);
 #define FIND_FILES		(0x0100)
 #define FIND_COUNT_DENTRY	(0x0200)
 
+/* for env_flags */
+#define XARRAY			(0x0001)
+
 static char *header_fmt = "%-16s %-16s %-16s %7s %3s %s\n";
 static char *dentry_fmt = "%-16lx %-16lx %-16lx %7lu %3d %s%s\n";
 static char *negdent_fmt = "%-16lx %-16s %-16s %7s %3s %s\n";
@@ -54,6 +58,7 @@ static char *count_dentry_fmt = "%7d %6d %6d %s\n";
 
 /* Global variables */
 static int flags;
+static int env_flags;
 static FILE *outfp;
 static char *pgbuf;
 static ulong nr_written, nr_excluded;
@@ -127,8 +132,7 @@ dump_file(char *src, char *dst, ulong i_mapping, ulonglong i_size)
 
 	pgbuf = GETBUF(PAGESIZE());
 
-	if (MEMBER_EXISTS("address_space", "i_pages") &&
-	    STREQ(MEMBER_TYPE_NAME("address_space", "i_pages"), "xarray"))
+	if (env_flags & XARRAY)
 		count = do_xarray(root, XARRAY_DUMP_CB, &lp);
 	else
 		count = do_radix_tree(root, RADIX_TREE_DUMP_CB, &lp);
@@ -1225,14 +1229,23 @@ cacheutils_init(void)
 	if (CU_INVALID_MEMBER(dentry_d_child))	/* RHEL7 and older */
 		CU_OFFSET_INIT(dentry_d_child, "dentry", "d_u");
 
+	if (MEMBER_EXISTS("address_space", "i_pages") &&
+	    STREQ(MEMBER_TYPE_NAME("address_space", "i_pages"), "xarray"))
+		env_flags |= XARRAY;
+
 	if (CRASHDEBUG(1)) {
-		error(INFO, "       inode_i_size: %lu\n",
+		fprintf(fp, "          env_flags: 0x%x", env_flags);
+		fprintf(fp, " %s", (env_flags & XARRAY) ?
+					"XARRAY" : "RADIX_TREE");
+		fprintf(fp, "\n");
+
+		fprintf(fp, "       inode_i_size: %lu\n",
 			CU_OFFSET(inode_i_size));
-		error(INFO, "  vfsmount_mnt_root: %lu\n",
+		fprintf(fp, "  vfsmount_mnt_root: %lu\n",
 			CU_OFFSET(vfsmount_mnt_root));
-		error(INFO, "   dentry_d_subdirs: %lu\n",
+		fprintf(fp, "   dentry_d_subdirs: %lu\n",
 			CU_OFFSET(dentry_d_subdirs));
-		error(INFO, "     dentry_d_child: %lu\n",
+		fprintf(fp, "     dentry_d_child: %lu\n",
 			CU_OFFSET(dentry_d_child));
 	}
 
