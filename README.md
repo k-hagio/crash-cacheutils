@@ -1,7 +1,7 @@
 cacheutils
 ==========
 
-cacheutils is an extension module for [crash utility][1] that lists dentry
+The cacheutils is an extension module for [crash utility][1] that lists dentry
 caches and dumps page caches associated with a specified file path in a vmcore.
 The module allows you to find and see page caches of log/config files in your
 vmcore.
@@ -11,6 +11,8 @@ without excluding page caches by [makedumpfile][2].
 
 Getting Started
 ---------------
+
+The module requires crash-7.2.7 or later.
 
 To build the module from the top-level `crash-<version>` directory, enter:
 
@@ -25,7 +27,7 @@ To show the module's commands, enter:
 
     crash> extend
     SHARED OBJECT            COMMANDS
-    <path-to>/cacheutils.so  ccat cls
+    <path-to>/cacheutils.so  ccat cls cfind
 
 Help Pages
 ----------
@@ -35,15 +37,15 @@ NAME
   cls - list dentry and inode caches
 
 SYNOPSIS
-  cls [-adU] [-n pid|task] abspath...
+  cls [-adlU] [-n pid|task] abspath...
 
 DESCRIPTION
-  This command displays the addresses of dentry, inode and i_mapping,
-  and nrpages of a specified absolute path and its subdirs if it exists
-  in dentry cache.
+  This command displays the addresses of dentry, inode and nrpages of a
+  specified absolute path and its subdirs if it exists in dentry cache.
 
     -a  also display negative dentries in the subdirs list.
     -d  display the directory itself only, without its contents.
+    -l  use a long format to display mode, size and mtime additionally.
     -U  do not sort, list dentries in directory order.
 
   For kernels supporting mount namespaces, the -n option may be used to
@@ -56,28 +58,40 @@ EXAMPLE
   Display the "/var/log/messages" regular file's information:
 
     crash> cls /var/log/messages
-    DENTRY           INODE            I_MAPPING        NRPAGES   % PATH
-    ffff9c0c28fda480 ffff9c0c22c675b8 ffff9c0c22c67728     220 100 /var/log/messages
+    DENTRY           INODE            NRPAGES   % PATH
+    ffff9c0c28fda480 ffff9c0c22c675b8     220 100 /var/log/messages
 
   The '%' column shows the percentage of cached pages in the file.
 
   Display the "/var/log" directory and its subdirs information:
 
     crash> cls /var/log
-    DENTRY           INODE            I_MAPPING        NRPAGES   % PATH
-    ffff9c0c3eabe300 ffff9c0c3e875b78 ffff9c0c3e875ce8       0   0 ./
-    ffff9c0c16a22900 ffff9c0c16ada2f8 ffff9c0c16ada468       0   0 anaconda/
-    ffff9c0c37611000 ffff9c0c3759f5b8 ffff9c0c3759f728       0   0 audit/
-    ffff9c0c375ccc00 ffff9c0c3761c8b8 ffff9c0c3761ca28       1 100 btmp
-    ffff9c0c28fda240 ffff9c0c22c713f8 ffff9c0c22c71568       6 100 cron
-    ffff9c0c3eb7f180 ffff9c0bfd402a78 ffff9c0bfd402be8      36   7 dnf.librepo.log
+    DENTRY           INODE            NRPAGES   % PATH
+    ffff9c0c3eabe300 ffff9c0c3e875b78       0   0 ./
+    ffff9c0c16a22900 ffff9c0c16ada2f8       0   0 anaconda/
+    ffff9c0c37611000 ffff9c0c3759f5b8       0   0 audit/
+    ffff9c0c375ccc00 ffff9c0c3761c8b8       1 100 btmp
+    ffff9c0c28fda240 ffff9c0c22c713f8       6 100 cron
+    ffff9c0c3eb7f180 ffff9c0bfd402a78      36   7 dnf.librepo.log
+    ...
+
+  In addition to the same infomation, display their mode, size and mtime:
+
+    crash> cls -l /var/log
+    DENTRY           INODE            NRPAGES   %   MODE        SIZE MTIME                         PATH
+    ffff9c0c3eabe300 ffff9c0c3e875b78       0   0  40755        4096 2018-11-25.03:39:01.479315763 ./
+    ffff9c0c16a22900 ffff9c0c16ada2f8       0   0  40755         250 2018-03-21.13:18:38.816000000 anaconda/
+    ffff9c0c37611000 ffff9c0c3759f5b8       0   0  40700          80 2018-10-25.19:02:13.968692776 audit/
+    ffff9c0c375ccc00 ffff9c0c3761c8b8       1 100 100660         384 2018-11-28.16:39:34.538315763 btmp
+    ffff9c0c28fda240 ffff9c0c22c713f8       6 100 100600       23435 2018-11-28.16:01:01.667315763 cron
+    ffff9c0c3eb7f180 ffff9c0bfd402a78      36   7 100600     1921580 2018-11-28.16:41:24.073315763 dnf.librepo.log
     ...
 
   Display the "/var/log" directory itself only:
 
     crash> cls -d /var/log
-    DENTRY           INODE            I_MAPPING        NRPAGES   % PATH
-    ffff9c0c3eabe300 ffff9c0c3e875b78 ffff9c0c3e875ce8       0   0 /var/log/
+    DENTRY           INODE            NRPAGES   % PATH
+    ffff9c0c3eabe300 ffff9c0c3e875b78       0   0 /var/log/
 ```
 ```
 NAME
@@ -181,13 +195,7 @@ Tested Kernels
 --------------
 
 - RHEL5 to RHEL8 (x86_64)
-- Linux 2.6.16 to 5.1 (x86_64 and i686)
-
-Plans
------
-
-- ~~support mount namespace~~ (supported on 06/11/2019)
-- ~~search directories that have many negative dentries~~ (supported on 07/12/2019)
+- Linux 2.6.16 to 5.4 (x86_64 and i686)
 
 Related Links
 -------------
