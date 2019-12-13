@@ -41,6 +41,7 @@ void cmd_cfind(void);
 #define DUMP_FILE		(0x0001)
 #define DUMP_DONT_SEEK		(0x0002)
 #define DUMP_DIRECTORY		(0x0004)
+#define DUMP_COUNT_ONLY		(0x0008)
 #define SHOW_INFO		(0x0010)
 #define SHOW_INFO_DIRS		(0x0020)
 #define SHOW_INFO_NEG_DENTS	(0x0040)
@@ -72,6 +73,7 @@ static ulong nr_written, nr_excluded;
 static ulonglong out_size;
 static struct task_context *tc;
 static int total_dentry, total_negdent;
+static ulong total_bytes, total_pages;
 
 /* Per-command caches and buffers */
 static int mount_count;
@@ -107,6 +109,12 @@ dump_slot(ulong slot)
 	pos = index * PAGESIZE();
 	size = (pos + PAGESIZE()) > out_size ? out_size - pos : PAGESIZE();
 
+	total_pages++;
+	total_bytes += size;
+
+	if (flags & DUMP_COUNT_ONLY)
+		return TRUE;
+
 	if (!(flags & DUMP_DONT_SEEK))
 		fseek(outfp, pos, SEEK_SET);
 
@@ -124,15 +132,17 @@ dump_file(char *src, char *dst, ulong i_mapping, ulonglong i_size)
 	struct list_pair lp;
 	ulong root, count;
 
-	if (dst) {
-		if ((outfp = fopen(dst, "w")) == NULL) {
-			error(INFO, "%s: cannot open: %s\n",
-				dst, strerror(errno));
-			return;
-		}
-		set_tmpfile2(outfp);
-	} else
-		outfp = fp;
+	if (!(flags & DUMP_COUNT_ONLY)) {
+		if (dst) {
+			if ((outfp = fopen(dst, "w")) == NULL) {
+				error(INFO, "%s: cannot open: %s\n",
+					dst, strerror(errno));
+				return;
+			}
+			set_tmpfile2(outfp);
+		} else
+			outfp = fp;
+	}
 
 	root = i_mapping + OFFSET(address_space_page_tree);
 	lp.value = dump_slot;
@@ -144,11 +154,13 @@ dump_file(char *src, char *dst, ulong i_mapping, ulonglong i_size)
 	else
 		count = do_radix_tree(root, RADIX_TREE_DUMP_CB, &lp);
 
-	if (!(flags & DUMP_DONT_SEEK))
-		ftruncate(fileno(outfp), i_size);
+	if (!(flags & DUMP_COUNT_ONLY)) {
+		if (!(flags & DUMP_DONT_SEEK))
+			ftruncate(fileno(outfp), i_size);
 
-	if (outfp != fp)
-		close_tmpfile2();
+		if (outfp != fp)
+			close_tmpfile2();
+	}
 
 	if (nr_excluded)
 		error(INFO, "%s: %lu/%lu pages excluded\n",
@@ -743,10 +755,12 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 	if (CRASHDEBUG(1))
 		fprintf(fp, "create dir  %s\n", dst);
 
-	if (mkdir(dst, MODE_RWX) < 0) {
-		error(INFO, "%s: cannot create directory: %s\n",
-			dst, strerror(errno));
-		return;
+	if (!(flags & DUMP_COUNT_ONLY)) {
+		if (mkdir(dst, MODE_RWX) < 0) {
+			error(INFO, "%s: cannot create directory: %s\n",
+				dst, strerror(errno));
+			return;
+		}
 	}
 
 	if (!(list = get_subdirs_list(&count, pdentry))) {
@@ -865,6 +879,8 @@ do_command(char *src, char *dst)
 				&i_mtime))
 		return;
 
+	total_bytes = total_pages = 0;
+
 	if (flags & DUMP_FILE) {
 		if (!S_ISREG(i_mode)) {
 			error(INFO, "%s: not regular file\n", src);
@@ -876,15 +892,25 @@ do_command(char *src, char *dst)
 
 		dump_file(src, dst, i_mapping, i_size);
 
+		if (flags & DUMP_COUNT_ONLY)
+			fprintf(fp, "Total %lu bytes (%lu pages)\n",
+				total_bytes, total_pages);
+
 	} else if (flags & DUMP_DIRECTORY) {
 		if (!S_ISDIR(i_mode)) {
 			error(INFO, "%s: not directory\n", src);
 			return;
 		}
 
-		fprintf(fp, "Extracting %s to %s...\n", src, dst);
+		if (flags & DUMP_COUNT_ONLY)
+			fprintf(fp, "Calculating %s...\n", src);
+		else
+			fprintf(fp, "Extracting %s to %s...\n", src, dst);
+
 		recursive_dump_dir(src, dst, dentry);
-		fprintf(fp, "done.\n");
+
+		fprintf(fp, "Total %lu bytes (%lu pages)\n",
+			total_bytes, total_pages);
 
 	} else if (flags & SHOW_INFO) {
 		int pct = calc_cached_percent(nrpages, i_size);
@@ -983,8 +1009,11 @@ cmd_ccat(void)
 	flags = DUMP_FILE;
 	tc = NULL;
 
-	while ((c = getopt(argcnt, args, "dn:S")) != EOF) {
+	while ((c = getopt(argcnt, args, "cdn:S")) != EOF) {
 		switch(c) {
+		case 'c':
+			flags |= DUMP_COUNT_ONLY;
+			break;
 		case 'd':
 			flags &= ~DUMP_FILE; /* exclusive */
 			flags |= DUMP_DIRECTORY;
@@ -1041,12 +1070,13 @@ cmd_ccat(void)
 char *help_ccat[] = {
 "ccat",				/* command name */
 "dump page caches",		/* short description */
-"   [-S] [-n pid|task] abspath|inode [outfile]\n"
-"  ccat -d [-S] [-n pid|task] abspath outdir",
+"   [-cS] [-n pid|task] abspath|inode [outfile]\n"
+"  ccat -d [-cS] [-n pid|task] abspath outdir",
 				/* argument synopsis, or " " if none */
 "  This command dumps the page caches of a specified inode or path like",
 "  \"cat\" command.",
 "",
+"       -c  only count the total bytes/pages, do not write files.",
 "       -d  extract a directory and its contents to outdir.",
 "       -S  do not fseek() and ftruncate() to outfile in order to",
 "           create a non-sparse file.",
@@ -1089,6 +1119,14 @@ char *help_ccat[] = {
 "  directory with one command:",
 "",
 "    %s> ccat -d /var/log /tmp/log",
+"    Extracting /var/log to /tmp/log...",
+"    Total 6691621 bytes (1729 pages)",
+"",
+"  Calculate the total bytes and pages to be written, do not write files.",
+"",
+"    %s> ccat -c -d /var/log /tmp/log",
+"    Calculating /var/log...",
+"    Total 6691621 bytes (1729 pages)",
 NULL
 };
 

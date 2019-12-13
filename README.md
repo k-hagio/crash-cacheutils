@@ -98,13 +98,14 @@ NAME
   ccat - dump page caches
 
 SYNOPSIS
-  ccat    [-S] [-n pid|task] abspath|inode [outfile]
-  ccat -d [-S] [-n pid|task] abspath outdir
+  ccat    [-cS] [-n pid|task] abspath|inode [outfile]
+  ccat -d [-cS] [-n pid|task] abspath outdir
 
 DESCRIPTION
   This command dumps the page caches of a specified inode or path like
   "cat" command.
 
+       -c  only count the total bytes/pages, do not write files.
        -d  extract a directory and its contents to outdir.
        -S  do not fseek() and ftruncate() to outfile in order to
            create a non-sparse file.
@@ -147,6 +148,14 @@ EXAMPLE
   directory with one command:
 
     crash> ccat -d /var/log /tmp/log
+    Extracting /var/log to /tmp/log...
+    Total 6691621 bytes (1729 pages)
+
+  Calculate the total bytes and pages to be written, do not write files.
+
+    crash> ccat -c -d /var/log /tmp/log
+    Calculating /var/log...
+    Total 6691621 bytes (1729 pages)
 ```
 ```
 NAME
