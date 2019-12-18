@@ -41,7 +41,7 @@ SYNOPSIS
 
 DESCRIPTION
   This command displays the addresses of dentry, inode and nrpages of a
-  specified absolute path and its subdirs if it exists in dentry cache.
+  specified absolute path and its subdirs if they exist in dentry cache.
 
     -a  also display negative dentries in the subdirs list.
     -d  display the directory itself only, without its contents.
@@ -75,7 +75,7 @@ EXAMPLE
     ffff9c0c3eb7f180 ffff9c0bfd402a78      36   7 dnf.librepo.log
     ...
 
-  In addition to the same infomation, display their mode, size and mtime:
+  In addition to the same information, display their mode, size and mtime:
 
     crash> cls -l /var/log
     DENTRY           INODE            NRPAGES   %   MODE        SIZE MTIME                         PATH
@@ -140,7 +140,7 @@ EXAMPLE
 
     crash> ccat -S /var/log/messages messages.non-sparse
 
-  NOTE: Redirecting to a file will also works, but it can includes crash's
+  NOTE: Redirecting to a file will also works, but it can contain crash's
   messages, so specifying an outfile is recommended for restoring a file.
 
   Extract the "/var/log" directory and its contents to the new "/tmp/log"
