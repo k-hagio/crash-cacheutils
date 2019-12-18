@@ -41,6 +41,7 @@ void cmd_cfind(void);
 #define DUMP_FILE		(0x0001)
 #define DUMP_DONT_SEEK		(0x0002)
 #define DUMP_DIRECTORY		(0x0004)
+#define DUMP_COUNT_ONLY		(0x0008)
 #define SHOW_INFO		(0x0010)
 #define SHOW_INFO_DIRS		(0x0020)
 #define SHOW_INFO_NEG_DENTS	(0x0040)
@@ -72,6 +73,7 @@ static ulong nr_written, nr_excluded;
 static ulonglong out_size;
 static struct task_context *tc;
 static int total_dentry, total_negdent;
+static ulong total_pages;
 
 /* Per-command caches and buffers */
 static int mount_count;
@@ -740,13 +742,15 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 	uint i_mode;
 	char srcpath[PATH_MAX], dstpath[PATH_MAX];
 
-	if (CRASHDEBUG(1))
-		fprintf(fp, "create dir  %s\n", dst);
+	if (!(flags & DUMP_COUNT_ONLY)) {
+		if (CRASHDEBUG(1))
+			fprintf(fp, "create dir  %s\n", dst);
 
-	if (mkdir(dst, MODE_RWX) < 0) {
-		error(INFO, "%s: cannot create directory: %s\n",
-			dst, strerror(errno));
-		return;
+		if (mkdir(dst, MODE_RWX) < 0) {
+			error(INFO, "%s: cannot create directory: %s\n",
+				dst, strerror(errno));
+			return;
+		}
 	}
 
 	if (!(list = get_subdirs_list(&count, pdentry))) {
@@ -794,12 +798,16 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 					fprintf(fp, "%s: no cached pages\n",
 						srcpath);
 				continue;
+			} else if (flags & DUMP_COUNT_ONLY) {
+				total_pages += nrpages;
+				continue;
 			}
 
 			if (CRASHDEBUG(1))
 				fprintf(fp, "create file %s\n", dstpath);
 
 			dump_file(srcpath, dstpath, i_mapping, i_size);
+			total_pages += nr_written;
 		}
 	}
 
@@ -872,6 +880,10 @@ do_command(char *src, char *dst)
 		} else if (!nrpages) {
 			error(INFO, "%s: no cached pages\n", src);
 			return;
+		} else if (flags & DUMP_COUNT_ONLY) {
+			fprintf(fp, "Estimated %lu pages (%lu KiB)\n",
+				nrpages, PAGESIZE() * nrpages >> 10);
+			return;
 		}
 
 		dump_file(src, dst, i_mapping, i_size);
@@ -882,9 +894,17 @@ do_command(char *src, char *dst)
 			return;
 		}
 
-		fprintf(fp, "Extracting %s to %s...\n", src, dst);
+		if (flags & DUMP_COUNT_ONLY)
+			fprintf(fp, "Estimating %s...\n", src);
+		else
+			fprintf(fp, "Extracting %s to %s...\n", src, dst);
+
+		total_pages = 0;
+
 		recursive_dump_dir(src, dst, dentry);
-		fprintf(fp, "done.\n");
+
+		fprintf(fp, "Total %lu pages (%lu KiB)\n",
+			total_pages, PAGESIZE() * total_pages >> 10);
 
 	} else if (flags & SHOW_INFO) {
 		int pct = calc_cached_percent(nrpages, i_size);
@@ -983,8 +1003,11 @@ cmd_ccat(void)
 	flags = DUMP_FILE;
 	tc = NULL;
 
-	while ((c = getopt(argcnt, args, "dn:S")) != EOF) {
+	while ((c = getopt(argcnt, args, "cdn:S")) != EOF) {
 		switch(c) {
+		case 'c':
+			flags |= DUMP_COUNT_ONLY;
+			break;
 		case 'd':
 			flags &= ~DUMP_FILE; /* exclusive */
 			flags |= DUMP_DIRECTORY;
@@ -1041,12 +1064,14 @@ cmd_ccat(void)
 char *help_ccat[] = {
 "ccat",				/* command name */
 "dump page caches",		/* short description */
-"   [-S] [-n pid|task] abspath|inode [outfile]\n"
-"  ccat -d [-S] [-n pid|task] abspath outdir",
+"   [-cS] [-n pid|task] abspath|inode [outfile]\n"
+"  ccat -d [-cS] [-n pid|task] abspath outdir",
 				/* argument synopsis, or " " if none */
 "  This command dumps the page caches of a specified inode or path like",
 "  \"cat\" command.",
 "",
+"       -c  only count the total pages to be written without creating any",
+"           files or directories.",
 "       -d  extract a directory and its contents to outdir.",
 "       -S  do not fseek() and ftruncate() to outfile in order to",
 "           create a non-sparse file.",
@@ -1089,6 +1114,15 @@ char *help_ccat[] = {
 "  directory with one command:",
 "",
 "    %s> ccat -d /var/log /tmp/log",
+"    Extracting /var/log to /tmp/log...",
+"    Total 127034 pages (508136 KiB)",
+"",
+"  Count the total pages to be written in advance without creating any",
+"  files or directories:",
+"",
+"    %s> ccat -c -d /var/log /tmp/log",
+"    Estimating /var/log...",
+"    Total 127034 pages (508136 KiB)",
 NULL
 };
 
