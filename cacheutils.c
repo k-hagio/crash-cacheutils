@@ -365,7 +365,6 @@ show_subdirs_info(ulong dentry)
 {
 	ulong *list;
 	int i, count;
-	char *dentry_buf;
 	ulong d, inode, i_mapping, nrpages;
 	uint i_mode;
 	ulonglong i_size;
@@ -379,9 +378,11 @@ show_subdirs_info(ulong dentry)
 
 	for (i = 0, p = inode_list; i < count; i++) {
 		d = list[i];
-		dentry_buf = fill_dentry_cache(d);
+		if (!readmem(d, KVADDR, dentry_data, SIZE(dentry),
+		    "dentry buffer", RETURN_ON_ERROR))
+			continue;
 
-		inode = ULONG(dentry_buf + OFFSET(dentry_d_inode));
+		inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
 		if (inode && get_inode_info(inode, &i_mode, &i_mapping,
 					&i_size, &nrpages, &i_mtime)) {
 			p->inode = inode;
@@ -397,7 +398,7 @@ show_subdirs_info(ulong dentry)
 				continue;
 		}
 		p->dentry = d;
-		p->name = get_dentry_name(d, dentry_buf, 1);
+		p->name = get_dentry_name(d, dentry_data, 1);
 		p++;
 	}
 	count = p - inode_list;
