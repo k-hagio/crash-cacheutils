@@ -220,5 +220,5 @@ Related Links
 Author
 ------
 
-- Kazuhito Hagio &lt;k-hagio@ab.jp.nec.com&gt;
+- Kazuhito Hagio &lt;k-hagio-ab@nec.com&gt;
 
