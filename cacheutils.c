@@ -742,6 +742,7 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 	ulonglong i_size;
 	uint i_mode;
 	char srcpath[PATH_MAX], dstpath[PATH_MAX];
+	struct timespec ts[2];
 
 	if (!(flags & DUMP_COUNT_ONLY)) {
 		if (CRASHDEBUG(1))
@@ -759,6 +760,7 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 	}
 
 	slash = (src[1] == '\0') ? "" : "/";
+	ts[0].tv_nsec = UTIME_OMIT; /* do not set atime */
 
 	for (i = 0; i < count; i++) {
 		d = dentry = list[i];
@@ -769,7 +771,7 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 		inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
 
 		if (!inode || !get_inode_info(inode, &i_mode, &i_mapping,
-					&i_size, &nrpages, NULL))
+					&i_size, &nrpages, &ts[1]))
 			continue;
 
 		snprintf(srcpath, PATH_MAX, "%s%s%s", src, slash, name);
@@ -809,6 +811,16 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 
 			dump_file(srcpath, dstpath, i_mapping, i_size);
 			total_pages += nr_written;
+		} else
+			continue;
+
+		if (!(flags & DUMP_COUNT_ONLY)) {
+			if (CRASHDEBUG(1))
+				fprintf(fp, "set mtime %s\n", dstpath);
+
+			if (utimensat(0, dstpath, ts, 0) < 0)
+				error(INFO, "%s: cannot set mtime: %s\n",
+					dstpath, strerror(errno));
 		}
 	}
 
@@ -848,7 +860,7 @@ do_command(char *src, char *dst)
 	ulong inode, i_mapping, dentry, nrpages;
 	ulonglong i_size;
 	uint i_mode;
-	struct timespec i_mtime;
+	struct timespec ts[2];
 
 	inode = dentry = 0;
 	if (flags & DUMP_FILE)
@@ -871,8 +883,10 @@ do_command(char *src, char *dst)
 	}
 
 	if (!get_inode_info(inode, &i_mode, &i_mapping, &i_size, &nrpages,
-				&i_mtime))
+				&ts[1]))
 		return;
+
+	ts[0].tv_nsec = UTIME_OMIT; /* do not set atime */
 
 	if (flags & DUMP_FILE) {
 		if (!S_ISREG(i_mode)) {
@@ -889,6 +903,10 @@ do_command(char *src, char *dst)
 
 		dump_file(src, dst, i_mapping, i_size);
 
+		if (utimensat(0, dst, ts, 0) < 0)
+			error(INFO, "%s: cannot set mtime: %s\n",
+				dst, strerror(errno));
+
 	} else if (flags & DUMP_DIRECTORY) {
 		if (!S_ISDIR(i_mode)) {
 			error(INFO, "%s: not directory\n", src);
@@ -904,6 +922,12 @@ do_command(char *src, char *dst)
 
 		recursive_dump_dir(src, dst, dentry);
 
+		if (!(flags & DUMP_COUNT_ONLY)) {
+			if (utimensat(0, dst, ts, 0) < 0)
+				error(INFO, "%s: cannot set mtime: %s\n",
+					dst, strerror(errno));
+		}
+
 		fprintf(fp, "Total %lu pages (%lu KiB)\n",
 			total_pages, PAGESIZE() * total_pages >> 10);
 
@@ -918,13 +942,12 @@ do_command(char *src, char *dst)
 			fprintf(fp, header_lfmt, "DENTRY", "INODE", "NRPAGES",
 				"%", "MODE", "SIZE", "MTIME", "PATH");
 			fprintf(fp, dentry_lfmt, dentry, inode, nrpages,
-				pct, i_mode, i_size, get_strtime(&i_mtime),
+				pct, i_mode, i_size, get_strtime(&ts[1]),
 				name, get_type_indicator(i_mode));
 			if (CRASHDEBUG(1))
 				fprintf(fp,
 				    "  i_mapping:%-16lx i_mtime:%ld.%09ld\n",
-					i_mapping, i_mtime.tv_sec,
-					i_mtime.tv_nsec);
+					i_mapping, ts[1].tv_sec, ts[1].tv_nsec);
 		} else {
 			fprintf(fp, header_fmt, "DENTRY", "INODE", "NRPAGES",
 				"%", "PATH");
