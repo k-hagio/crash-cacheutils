@@ -121,7 +121,23 @@ dump_slot(ulong slot)
 }
 
 static void
-dump_file(char *src, char *dst, ulong i_mapping, ulonglong i_size)
+set_mtime(char *dst, struct timespec i_mtime)
+{
+	struct timespec ts[2];
+
+	ts[0].tv_nsec = UTIME_OMIT; /* do not set atime */
+	ts[1] = i_mtime;
+
+	if (CRASHDEBUG(1))
+		fprintf(fp, "set mtime %s\n", dst);
+
+	if (utimensat(AT_FDCWD, dst, ts, 0) < 0)
+		error(INFO, "%s: cannot set mtime: %s\n", dst, strerror(errno));
+}
+
+static void
+dump_file(char *src, char *dst, ulong i_mapping, ulonglong i_size,
+	struct timespec i_mtime)
 {
 	struct list_pair lp;
 	ulong root, count;
@@ -149,8 +165,10 @@ dump_file(char *src, char *dst, ulong i_mapping, ulonglong i_size)
 	if (!(flags & DUMP_DONT_SEEK))
 		ftruncate(fileno(outfp), i_size);
 
-	if (outfp != fp)
+	if (outfp != fp) {
 		close_tmpfile2();
+		set_mtime(dst, i_mtime);
+	}
 
 	if (nr_excluded)
 		error(INFO, "%s: %lu/%lu pages excluded\n",
@@ -390,8 +408,7 @@ show_subdirs_info(ulong dentry)
 			p->i_size = i_size;
 			p->nrpages = nrpages;
 			p->i_mode = i_mode;
-			p->i_mtime.tv_sec = i_mtime.tv_sec;
-			p->i_mtime.tv_nsec = i_mtime.tv_nsec;
+			p->i_mtime = i_mtime;
 		} else {
 			p->i_mapping = 0;
 			if (!(flags & SHOW_INFO_NEG_DENTS))
@@ -733,7 +750,7 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 #define MODE_RWX (S_IRWXU|S_IRWXG|S_IRWXO)
 
 static void
-recursive_dump_dir(char *src, char *dst, ulong pdentry)
+recursive_dump_dir(char *src, char *dst, ulong pdentry, struct timespec pmtime)
 {
 	ulong *list;
 	int i, count;
@@ -742,6 +759,7 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 	ulonglong i_size;
 	uint i_mode;
 	char srcpath[PATH_MAX], dstpath[PATH_MAX];
+	struct timespec i_mtime;
 
 	if (!(flags & DUMP_COUNT_ONLY)) {
 		if (CRASHDEBUG(1))
@@ -754,9 +772,8 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 		}
 	}
 
-	if (!(list = get_subdirs_list(&count, pdentry))) {
-		return;
-	}
+	if (!(list = get_subdirs_list(&count, pdentry)))
+		goto no_subdirs;
 
 	slash = (src[1] == '\0') ? "" : "/";
 
@@ -769,7 +786,7 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 		inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
 
 		if (!inode || !get_inode_info(inode, &i_mode, &i_mapping,
-					&i_size, &nrpages, NULL))
+					&i_size, &nrpages, &i_mtime))
 			continue;
 
 		snprintf(srcpath, PATH_MAX, "%s%s%s", src, slash, name);
@@ -791,7 +808,7 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 				}
 				dentry = d;
 			}
-			recursive_dump_dir(srcpath, dstpath, dentry);
+			recursive_dump_dir(srcpath, dstpath, dentry, i_mtime);
 
 		} else if (S_ISREG(i_mode)) {
 			if (!nrpages) {
@@ -807,12 +824,17 @@ recursive_dump_dir(char *src, char *dst, ulong pdentry)
 			if (CRASHDEBUG(1))
 				fprintf(fp, "create file %s\n", dstpath);
 
-			dump_file(srcpath, dstpath, i_mapping, i_size);
+			dump_file(srcpath, dstpath, i_mapping, i_size, i_mtime);
 			total_pages += nr_written;
 		}
 	}
 
 	FREEBUF(list);
+
+no_subdirs:
+	if (!(flags & DUMP_COUNT_ONLY)) {
+		set_mtime(dst, pmtime);
+	}
 }
 
 /*
@@ -887,7 +909,7 @@ do_command(char *src, char *dst)
 			return;
 		}
 
-		dump_file(src, dst, i_mapping, i_size);
+		dump_file(src, dst, i_mapping, i_size, i_mtime);
 
 	} else if (flags & DUMP_DIRECTORY) {
 		if (!S_ISDIR(i_mode)) {
@@ -902,7 +924,7 @@ do_command(char *src, char *dst)
 
 		total_pages = 0;
 
-		recursive_dump_dir(src, dst, dentry);
+		recursive_dump_dir(src, dst, dentry, i_mtime);
 
 		fprintf(fp, "Total %lu pages (%lu KiB)\n",
 			total_pages, PAGESIZE() * total_pages >> 10);
