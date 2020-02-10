@@ -375,6 +375,11 @@ sort_by_name(const void *arg1, const void *arg2)
 	inode_info_t *p = (inode_info_t *)arg1;
 	inode_info_t *q = (inode_info_t *)arg2;
 
+	/*
+	 * NOTE: To sort files like ls command, strcoll(3) should be used,
+	 * but since the crash utility doesn't call setlocale(LC_ALL, ""),
+	 * it doesn't work according to the environment variables.
+	 */
 	return strcmp(p->name, q->name);
 }
 
