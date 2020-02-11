@@ -37,7 +37,7 @@ NAME
   cls - list dentry and inode caches
 
 SYNOPSIS
-  cls [-adlU] [-n pid|task] abspath...
+  cls [-adlRU] [-n pid|task] abspath...
 
 DESCRIPTION
   This command displays the addresses of dentry, inode and nrpages of a
@@ -46,6 +46,7 @@ DESCRIPTION
     -a  also display negative dentries in the subdirs list.
     -d  display the directory itself only, without its contents.
     -l  use a long format to display mode, size and mtime additionally.
+    -R  display subdirs recursively.
     -U  do not sort, list dentries in directory order.
 
   For kernels supporting mount namespaces, the -n option may be used to
@@ -92,6 +93,21 @@ EXAMPLE
     crash> cls -d /var/log
     DENTRY           INODE            NRPAGES   % PATH
     ffff9c0c3eabe300 ffff9c0c3e875b78       0   0 /var/log/
+
+  Display the "/var/log" directory and its subdirs recursively:
+
+    crash> cls -R /var/log
+    DENTRY           INODE            NRPAGES   % PATH
+    ffff9c0c3eabe300 ffff9c0c3e875b78       0   0 ./
+    ffff9c0c16a22900 ffff9c0c16ada2f8       0   0 anaconda/
+    ffff9c0c37611000 ffff9c0c3759f5b8       0   0 audit/
+    ...
+
+    /var/log/anaconda:
+
+    /var/log/audit:
+    ffff9c0c37582e40 ffff9c0c3759d038     208  19 audit.log
+    ...
 ```
 ```
 NAME

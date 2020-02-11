@@ -47,6 +47,7 @@ void cmd_cfind(void);
 #define SHOW_INFO_NEG_DENTS	(0x0040)
 #define SHOW_INFO_DONT_SORT	(0x0080)
 #define SHOW_INFO_LONG		(0x0100)
+#define SHOW_INFO_RECURSIVE	(0x0200)
 #define FIND_FILES		(0x1000)
 #define FIND_COUNT_DENTRY	(0x2000)
 
@@ -384,7 +385,7 @@ sort_by_name(const void *arg1, const void *arg2)
 }
 
 static void
-show_subdirs_info(ulong dentry)
+show_subdirs_info(ulong dentry, char *src)
 {
 	ulong *list;
 	int i, count;
@@ -460,7 +461,25 @@ show_subdirs_info(ulong dentry)
 					"-", "-", p->name);
 		}
 
-		free(p->name);
+		if (!(flags & SHOW_INFO_RECURSIVE))
+			free(p->name);	/* still needed below */
+	}
+
+	if (flags & SHOW_INFO_RECURSIVE) {
+		char path[PATH_MAX];
+		char *slash = (src[1] == '\0') ? "" : "/";
+
+		for (i = 0, p = inode_list; i < count; i++, p++) {
+			if (i_mapping && S_ISDIR(p->i_mode)) {
+				snprintf(path, PATH_MAX, "%s%s%s",
+					src, slash, p->name);
+				fprintf(fp, "\n%s:\n", path);
+
+				show_subdirs_info(p->dentry, path);
+			}
+
+			free(p->name);
+		}
 	}
 
 	FREEBUF(inode_list);
@@ -962,7 +981,7 @@ do_command(char *src, char *dst)
 		}
 
 		if (S_ISDIR(i_mode) && !(flags & SHOW_INFO_DIRS))
-			show_subdirs_info(dentry);
+			show_subdirs_info(dentry, src);
 
 	} else if (flags & FIND_FILES) {
 		if (flags & FIND_COUNT_DENTRY) {
@@ -1163,7 +1182,7 @@ cmd_cls(void)
 	flags = SHOW_INFO;
 	tc = NULL;
 
-	while ((c = getopt(argcnt, args, "adln:U")) != EOF) {
+	while ((c = getopt(argcnt, args, "adln:RU")) != EOF) {
 		switch(c) {
 		case 'a':
 			flags |= SHOW_INFO_NEG_DENTS;
@@ -1187,6 +1206,9 @@ cmd_cls(void)
 			break;
 		case 'U':
 			flags |= SHOW_INFO_DONT_SORT;
+			break;
+		case 'R':
+			flags |= SHOW_INFO_RECURSIVE;
 			break;
 		default:
 			argerrs++;
@@ -1215,7 +1237,7 @@ cmd_cls(void)
 char *help_cls[] = {
 "cls",				/* command name */
 "list dentry and inode caches",	/* short description */
-"[-adlU] [-n pid|task] abspath...",	/* argument synopsis, or " " if none */
+"[-adlRU] [-n pid|task] abspath...",	/* argument synopsis, or " " if none */
 
 "  This command displays the addresses of dentry, inode and nrpages of a",
 "  specified absolute path and its subdirs if they exist in dentry cache.",
@@ -1223,6 +1245,7 @@ char *help_cls[] = {
 "    -a  also display negative dentries in the subdirs list.",
 "    -d  display the directory itself only, without its contents.",
 "    -l  use a long format to display mode, size and mtime additionally.",
+"    -R  display subdirs recursively.",
 "    -U  do not sort, list dentries in directory order.",
 "",
 "  For kernels supporting mount namespaces, the -n option may be used to",
@@ -1269,6 +1292,21 @@ char *help_cls[] = {
 "    %s> cls -d /var/log",
 "    DENTRY           INODE            NRPAGES   % PATH",
 "    ffff9c0c3eabe300 ffff9c0c3e875b78       0   0 /var/log/",
+"",
+"  Display the \"/var/log\" directory and its subdirs recursively:",
+"",
+"    crash> cls -R /var/log",
+"    DENTRY           INODE            NRPAGES   % PATH",
+"    ffff9c0c3eabe300 ffff9c0c3e875b78       0   0 ./",
+"    ffff9c0c16a22900 ffff9c0c16ada2f8       0   0 anaconda/",
+"    ffff9c0c37611000 ffff9c0c3759f5b8       0   0 audit/",
+"    ...",
+"",
+"    /var/log/anaconda:",
+"",
+"    /var/log/audit:",
+"    ffff9c0c37582e40 ffff9c0c3759d038     208  19 audit.log",
+"    ...",
 NULL
 };
 
