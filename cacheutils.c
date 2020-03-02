@@ -48,6 +48,7 @@ void cmd_cfind(void);
 #define SHOW_INFO_DONT_SORT	(0x0080)
 #define SHOW_INFO_LONG		(0x0100)
 #define SHOW_INFO_RECURSIVE	(0x0200)
+#define SHOW_INFO_SORT_MTIME	(0x0400)
 #define FIND_FILES		(0x1000)
 #define FIND_COUNT_DENTRY	(0x2000)
 
@@ -384,6 +385,19 @@ sort_by_name(const void *arg1, const void *arg2)
 	return strcmp(p->name, q->name);
 }
 
+static int
+sort_by_mtime(const void *arg1, const void *arg2)
+{
+	struct timespec *p = &((inode_info_t *)arg1)->i_mtime;
+	struct timespec *q = &((inode_info_t *)arg2)->i_mtime;
+
+	/* newest first */
+	if (p->tv_sec == q->tv_sec)
+		return q->tv_nsec - p->tv_nsec;
+
+	return q->tv_sec - p->tv_sec;
+}
+
 static void
 show_subdirs_info(ulong dentry, char *src)
 {
@@ -399,6 +413,7 @@ show_subdirs_info(ulong dentry, char *src)
 		return;
 
 	inode_list = (inode_info_t *)GETBUF(sizeof(inode_info_t) * count);
+	BZERO(inode_list, sizeof(inode_info_t) * count);
 
 	for (i = 0, p = inode_list; i < count; i++) {
 		d = list[i];
@@ -427,7 +442,9 @@ show_subdirs_info(ulong dentry, char *src)
 	count = p - inode_list;
 
 	if (!(flags & SHOW_INFO_DONT_SORT))
-		qsort(inode_list, count, sizeof(inode_info_t), sort_by_name);
+		qsort(inode_list, count, sizeof(inode_info_t),
+			(flags & SHOW_INFO_SORT_MTIME) ?
+				sort_by_mtime : sort_by_name);
 
 	for (i = 0, p = inode_list; i < count; i++, p++) {
 		if (p->i_mapping) {
@@ -1182,7 +1199,7 @@ cmd_cls(void)
 	flags = SHOW_INFO;
 	tc = NULL;
 
-	while ((c = getopt(argcnt, args, "adln:RU")) != EOF) {
+	while ((c = getopt(argcnt, args, "adln:RtU")) != EOF) {
 		switch(c) {
 		case 'a':
 			flags |= SHOW_INFO_NEG_DENTS;
@@ -1204,11 +1221,14 @@ cmd_cls(void)
 				break;
 			}
 			break;
-		case 'U':
-			flags |= SHOW_INFO_DONT_SORT;
-			break;
 		case 'R':
 			flags |= SHOW_INFO_RECURSIVE;
+			break;
+		case 't':
+			flags |= SHOW_INFO_SORT_MTIME;
+			break;
+		case 'U':
+			flags |= SHOW_INFO_DONT_SORT;
 			break;
 		default:
 			argerrs++;
@@ -1246,6 +1266,7 @@ char *help_cls[] = {
 "    -d  display the directory itself only, without its contents.",
 "    -l  use a long format to display mode, size and mtime additionally.",
 "    -R  display subdirs recursively.",
+"    -t  sort subdirs by modification time, newest first.",
 "    -U  do not sort, list dentries in directory order.",
 "",
 "  For kernels supporting mount namespaces, the -n option may be used to",

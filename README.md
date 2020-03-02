@@ -47,6 +47,7 @@ DESCRIPTION
     -d  display the directory itself only, without its contents.
     -l  use a long format to display mode, size and mtime additionally.
     -R  display subdirs recursively.
+    -t  sort subdirs by modification time, newest first.
     -U  do not sort, list dentries in directory order.
 
   For kernels supporting mount namespaces, the -n option may be used to
