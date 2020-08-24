@@ -228,11 +228,11 @@ Tested Kernels
 Related Links
 -------------
 
-- [crash utility][1] (https://people.redhat.com/anderson/)
-- [makedumpfile][2] (https://sourceforge.net/projects/makedumpfile/)
+- [crash utility][1] (https://crash-utility.github.io/)
+- [makedumpfile][2] (https://github.com/makedumpfile/makedumpfile)
 
-[1]: https://people.redhat.com/anderson/
-[2]: https://sourceforge.net/projects/makedumpfile/
+[1]: https://crash-utility.github.io/
+[2]: https://github.com/makedumpfile/makedumpfile
 
 Author
 ------
