@@ -1,6 +1,6 @@
 /* cacheutils.c - crash extension module for dumping page caches
  *
- * Copyright (C) 2019-2020 NEC Corporation
+ * Copyright (C) 2019-2021 NEC Corporation
  *
  * Author: Kazuhito Hagio <k-hagio-ab@nec.com>
  *
@@ -31,11 +31,11 @@ struct cu_offset_table {
 };
 static struct cu_offset_table cu_offset_table = {};
 
-void cacheutils_init(void);
-void cacheutils_fini(void);
-void cmd_ccat(void);
-void cmd_cls(void);
-void cmd_cfind(void);
+static void cacheutils_init(void);
+static void cacheutils_fini(void);
+static void cmd_ccat(void);
+static void cmd_cls(void);
+static void cmd_cfind(void);
 
 /* for flags */
 #define DUMP_FILE		(0x0001)
@@ -1057,7 +1057,7 @@ set_default_task_context(void)
 		pid++;
 }
 
-void
+static void
 cmd_ccat(void)
 {
 	int c;
@@ -1125,7 +1125,7 @@ cmd_ccat(void)
 	clear_cache();
 }
 
-char *help_ccat[] = {
+static char *help_ccat[] = {
 "ccat",				/* command name */
 "dump page caches",		/* short description */
 "   [-cS] [-n pid|task] abspath|inode [outfile]\n"
@@ -1190,7 +1190,7 @@ char *help_ccat[] = {
 NULL
 };
 
-void
+static void
 cmd_cls(void)
 {
 	int c;
@@ -1254,7 +1254,7 @@ cmd_cls(void)
 	clear_cache();
 }
 
-char *help_cls[] = {
+static char *help_cls[] = {
 "cls",				/* command name */
 "list dentry and inode caches",	/* short description */
 "[-adlRU] [-n pid|task] abspath...",	/* argument synopsis, or " " if none */
@@ -1331,7 +1331,7 @@ char *help_cls[] = {
 NULL
 };
 
-void
+static void
 cmd_cfind(void)
 {
 	int c;
@@ -1378,7 +1378,7 @@ cmd_cfind(void)
 	clear_cache();
 }
 
-char *help_cfind[] = {
+static char *help_cfind[] = {
 "cfind",
 "search for files in a directory hierarchy",
 "[-ac] [-n pid|task] abspath",
@@ -1428,7 +1428,7 @@ static struct command_table_entry command_table[] = {
 
 #define DL_EXCLUDE_CACHE_PRI	(0x04)
 
-void __attribute__((constructor))
+static void __attribute__((constructor))
 cacheutils_init(void)
 {
 	int dump_level;
@@ -1477,7 +1477,7 @@ cacheutils_init(void)
 			dump_level);
 }
 
-void __attribute__((destructor))
+static void __attribute__((destructor))
 cacheutils_fini(void)
 {
 }
