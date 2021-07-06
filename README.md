@@ -223,7 +223,8 @@ Tested Kernels
 --------------
 
 - RHEL5 to RHEL8 (x86_64)
-- Linux 2.6.16 to 5.11 (x86_64 and i686)
+- Linux 2.6.16 to 5.13 (x86_64)
+- Linux 2.6.16 to 5.4 (i686)
 
 Related Links
 -------------
@@ -239,3 +240,4 @@ Author
 
 - Kazuhito Hagio &lt;k-hagio-ab@nec.com&gt;
 
+Kudos to s-taka, who suggested the original idea.
