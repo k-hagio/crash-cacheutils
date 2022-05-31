@@ -222,8 +222,8 @@ EXAMPLE
 Tested Kernels
 --------------
 
-- RHEL5 to RHEL8 (x86_64)
-- Linux 2.6.16 to 5.16 (x86_64)
+- RHEL5 to RHEL9 (x86_64)
+- Linux 2.6.16 to 5.18 (x86_64)
 - Linux 2.6.16 to 5.4 (i686)
 
 Related Links
