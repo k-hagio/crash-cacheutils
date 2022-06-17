@@ -1,6 +1,6 @@
 /* cacheutils.c - crash extension module for dumping page caches
  *
- * Copyright (C) 2019-2021 NEC Corporation
+ * Copyright (C) 2019-2022 NEC Corporation
  *
  * Author: Kazuhito Hagio <k-hagio-ab@nec.com>
  *
@@ -698,11 +698,12 @@ not_found:
 typedef struct {
 	ulong dentry;
 	char *name;
+	ulong inode;
 	uint i_mode;
 } dentry_info_t;
 
 static void
-recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
+recursive_list_dir(char *arg, ulong pdentry, ulong pinode, uint pi_mode)
 {
 	ulong *list;
 	int i, count, nr_negdents = 0;
@@ -712,7 +713,7 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 	dentry_info_t *dentry_list, *p;
 
 	if (!(flags & FIND_COUNT_DENTRY))
-		fprintf(fp, "%16lx %s\n", pdentry, arg);
+		fprintf(fp, "%16lx %16lx %s\n", pdentry, pinode, arg);
 
 	if (!S_ISDIR(pi_mode))
 		return;
@@ -731,9 +732,8 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 		readmem(d, KVADDR, dentry_data, SIZE(dentry),
 			"dentry", FAULT_ON_ERROR);
 
-		inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
-		if (inode && get_inode_info(inode, &i_mode, NULL, NULL, NULL,
-					NULL))
+		p->inode = ULONG(dentry_data + OFFSET(dentry_d_inode));
+		if (p->inode && get_inode_info(p->inode, &i_mode, NULL, NULL, NULL, NULL))
 			p->i_mode = i_mode;
 		else {
 			if (flags & FIND_COUNT_DENTRY) {
@@ -771,15 +771,15 @@ recursive_list_dir(char *arg, ulong pdentry, uint pi_mode)
 						OFFSET(dentry_d_inode));
 				if (inode && get_inode_info(inode, &i_mode,
 						NULL, NULL, NULL, NULL))
-					recursive_list_dir(path, d, i_mode);
+					recursive_list_dir(path, d, inode, i_mode);
 				else
 					error(INFO, "%s: invalid inode\n", path);
 			} else /* normal directory */
-				recursive_list_dir(path, p->dentry, p->i_mode);
+				recursive_list_dir(path, p->dentry, p->inode, p->i_mode);
 
 		} else if (!(flags & FIND_COUNT_DENTRY))
-			fprintf(fp, "%16lx %s%s%s\n",
-				p->dentry, arg, slash, p->name);
+			fprintf(fp, "%16lx %16lx %s%s%s\n",
+				p->dentry, p->inode, arg, slash, p->name);
 
 		free(p->name);
 	}
@@ -1007,7 +1007,7 @@ do_command(char *src, char *dst)
 			total_dentry = total_negdent = 0;
 		}
 
-		recursive_list_dir(src, dentry, i_mode);
+		recursive_list_dir(src, dentry, inode, i_mode);
 
 		if (flags & FIND_COUNT_DENTRY) {
 			fprintf(fp, count_dentry_fmt,
@@ -1400,8 +1400,9 @@ static char *help_cfind[] = {
 "  command:",
 "",
 "    %s> cfind / | grep messages",
-"    ffff88010113be00 /var/log/messages",
-"    ffff880449f86b40 /usr/lib/python2.7/site-packages/babel/messages",
+"    ffff9dc4df288c00 ffff9dc24dbb6308 /var/log/messages",
+"",
+"  The addresses are the file's dentry and inode respectively.",
 "",
 "  Count dentries in the /boot directory and its subdirectories:",
 "",

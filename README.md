@@ -201,8 +201,9 @@ EXAMPLE
   command:
 
     crash> cfind / | grep messages
-    ffff88010113be00 /var/log/messages
-    ffff880449f86b40 /usr/lib/python2.7/site-packages/babel/messages
+    ffff9dc4df288c00 ffff9dc24dbb6308 /var/log/messages
+
+  The addresses are the file's dentry and inode respectively.
 
   Count dentries in the /boot directory and its subdirectories:
 
