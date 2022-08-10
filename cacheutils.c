@@ -37,6 +37,8 @@ static void cmd_ccat(void);
 static void cmd_cls(void);
 static void cmd_cfind(void);
 
+static ulong get_mntpoint_dentry(char *path, char **remaining_path);
+
 /* for flags */
 #define DUMP_FILE		(0x0001)
 #define DUMP_DONT_SEEK		(0x0002)
@@ -487,12 +489,16 @@ show_subdirs_info(ulong dentry, char *src)
 		char *slash = (src[1] == '\0') ? "" : "/";
 
 		for (i = 0, p = inode_list; i < count; i++, p++) {
-			if (i_mapping && S_ISDIR(p->i_mode)) {
+			if (S_ISDIR(p->i_mode)) {
 				snprintf(path, PATH_MAX, "%s%s%s",
 					src, slash, p->name);
 				fprintf(fp, "\n%s:\n", path);
 
-				show_subdirs_info(p->dentry, path);
+				d = get_mntpoint_dentry(path, NULL);
+				if (!d)
+					d = p->dentry;
+
+				show_subdirs_info(d, path);
 			}
 
 			free(p->name);
