@@ -32,6 +32,11 @@ To show the module's commands, enter:
 Help Pages
 ----------
 
+The module has three commands: [`cls`](#cls-command), [`ccat`](#ccat-command)
+and [`cfind`](#cfind-command)
+
+### `cls` command
+
 ```
 NAME
   cls - list dentry and inode caches
@@ -110,6 +115,9 @@ EXAMPLE
     ffff9c0c37582e40 ffff9c0c3759d038     208  19 audit.log
     ...
 ```
+
+### `ccat` command
+
 ```
 NAME
   ccat - dump page caches
@@ -176,6 +184,9 @@ EXAMPLE
     Estimating /var/log...
     Total 127034 pages (508136 KiB)
 ```
+
+### `cfind` command
+
 ```
 NAME
   cfind - search for files in a directory hierarchy
@@ -224,7 +235,7 @@ Tested Kernels
 --------------
 
 - RHEL5 to RHEL9 (x86_64)
-- Linux 2.6.16 to 5.18 (x86_64)
+- Linux 2.6.16 to 6.1 (x86_64)
 - Linux 2.6.16 to 5.4 (i686)
 
 Related Links
