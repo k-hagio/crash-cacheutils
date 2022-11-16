@@ -61,6 +61,15 @@ DESCRIPTION
     -n pid   a process PID.
     -n task  a hexadecimal task_struct pointer.
 
+  These are file type indicators, which are appended to entries:
+
+    / : directory
+    * : executable
+    @ : symbolic link
+    | : named pipe
+    = : socket
+    (name) : unfinished dentry
+
 EXAMPLE
   Display the "/var/log/messages" regular file's information:
 

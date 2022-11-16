@@ -28,6 +28,8 @@ struct cu_offset_table {
 	long vfsmount_mnt_root;
 	long dentry_d_subdirs;
 	long dentry_d_child;
+	long dentry_d_hash;
+	long hlist_bl_node_pprev;
 };
 static struct cu_offset_table cu_offset_table = {};
 
@@ -370,6 +372,7 @@ typedef struct {
 	ulonglong i_size;
 	ulong nrpages;
 	uint i_mode;
+	int d_unhashed;
 	struct timespec i_mtime;
 } inode_info_t;
 
@@ -439,6 +442,9 @@ show_subdirs_info(ulong dentry, char *src)
 		}
 		p->dentry = d;
 		p->name = get_dentry_name(d, dentry_data, 1);
+		/* unfinished dentry */
+		p->d_unhashed = !ULONG(dentry_data + CU_OFFSET(dentry_d_hash) +
+					CU_OFFSET(hlist_bl_node_pprev));
 		p++;
 	}
 	count = p - inode_list;
@@ -472,12 +478,20 @@ show_subdirs_info(ulong dentry, char *src)
 			}
 
 		} else if (flags & SHOW_INFO_NEG_DENTS) {
+			char buf[NAME_MAX+3]; /* brackets and null byte */
+			char *name;
+			if (p->d_unhashed) {
+				snprintf(buf, sizeof(buf), "(%s)", p->name);
+				name = buf;
+			} else
+				name = p->name;
+
 			if (flags & SHOW_INFO_LONG)
 				fprintf(fp, negdent_lfmt, p->dentry, "-",
-					"-", "-", "-", "-", "-", p->name);
+					"-", "-", "-", "-", "-", name);
 			else
 				fprintf(fp, negdent_fmt, p->dentry, "-",
-					"-", "-", p->name);
+					"-", "-", name);
 		}
 
 		if (!(flags & SHOW_INFO_RECURSIVE))
@@ -1281,6 +1295,15 @@ static char *help_cls[] = {
 "    -n pid   a process PID.",
 "    -n task  a hexadecimal task_struct pointer.",
 "",
+"  These are file type indicators, which are appended to entries:",
+"",
+"    / : directory",
+"    * : executable",
+"    @ : symbolic link",
+"    | : named pipe",
+"    = : socket",
+"    (name) : unfinished dentry",
+"",
 "EXAMPLE",
 "  Display the \"/var/log/messages\" regular file's information:",
 "",
@@ -1449,6 +1472,10 @@ cacheutils_init(void)
 	CU_OFFSET_INIT(dentry_d_child, "dentry", "d_child");
 	if (CU_INVALID_MEMBER(dentry_d_child))	/* RHEL7 and older */
 		CU_OFFSET_INIT(dentry_d_child, "dentry", "d_u");
+	CU_OFFSET_INIT(dentry_d_hash, "dentry", "d_hash");
+	CU_OFFSET_INIT(hlist_bl_node_pprev, "hlist_bl_node", "pprev");
+	if (CU_INVALID_MEMBER(hlist_bl_node_pprev)) /* 2.6.37 and older */
+		CU_OFFSET_INIT(hlist_bl_node_pprev, "hlist_node", "pprev");
 
 	if (MEMBER_EXISTS("address_space", "i_pages") &&
 	    STREQ(MEMBER_TYPE_NAME("address_space", "i_pages"), "xarray"))
@@ -1474,6 +1501,8 @@ cacheutils_init(void)
 			CU_OFFSET(dentry_d_subdirs));
 		fprintf(fp, "     dentry_d_child: %lu\n",
 			CU_OFFSET(dentry_d_child));
+		fprintf(fp, "      dentry_d_hash: %lu\n", CU_OFFSET(dentry_d_hash));
+		fprintf(fp, "hlist_bl_node_pprev: %lu\n", CU_OFFSET(hlist_bl_node_pprev));
 	}
 
 	if ((*diskdump_flags & KDUMP_CMPRS_LOCAL) &&
