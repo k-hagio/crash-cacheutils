@@ -1,6 +1,6 @@
 /* cacheutils.c - crash extension module for dumping page caches
  *
- * Copyright (C) 2019-2022 NEC Corporation
+ * Copyright (C) 2019-2023 NEC Corporation
  *
  * Author: Kazuhito Hagio <k-hagio-ab@nec.com>
  *
@@ -31,7 +31,7 @@ struct cu_offset_table {
 	long dentry_d_hash;
 	long hlist_bl_node_pprev;
 };
-static struct cu_offset_table cu_offset_table = {};
+static struct cu_offset_table cu_offset_table = { INVALID_OFFSET };
 
 static void cacheutils_init(void);
 static void cacheutils_fini(void);
@@ -1486,23 +1486,22 @@ cacheutils_init(void)
 		env_flags |= TIMESPEC64;
 
 	if (CRASHDEBUG(1)) {
+		ulonglong data_debug = pc->flags & DATADEBUG;
+		pc->flags &= ~DATADEBUG;
+
 		fprintf(fp, "          env_flags: 0x%x", env_flags);
-		fprintf(fp, " %s", (env_flags & XARRAY) ?
-					"XARRAY" : "RADIX_TREE");
-		fprintf(fp, " %s", (env_flags & TIMESPEC64) ?
-					"TIMESPEC64" : "TIMESPEC");
+		fprintf(fp, " %s", (env_flags & XARRAY) ? "XARRAY" : "RADIX_TREE");
+		fprintf(fp, " %s", (env_flags & TIMESPEC64) ? "TIMESPEC64" : "TIMESPEC");
 		fprintf(fp, "\n");
 
-		fprintf(fp, "       inode_i_size: %lu\n",
-			CU_OFFSET(inode_i_size));
-		fprintf(fp, "  vfsmount_mnt_root: %lu\n",
-			CU_OFFSET(vfsmount_mnt_root));
-		fprintf(fp, "   dentry_d_subdirs: %lu\n",
-			CU_OFFSET(dentry_d_subdirs));
-		fprintf(fp, "     dentry_d_child: %lu\n",
-			CU_OFFSET(dentry_d_child));
+		fprintf(fp, "       inode_i_size: %lu\n", CU_OFFSET(inode_i_size));
+		fprintf(fp, "  vfsmount_mnt_root: %lu\n", CU_OFFSET(vfsmount_mnt_root));
+		fprintf(fp, "   dentry_d_subdirs: %lu\n", CU_OFFSET(dentry_d_subdirs));
+		fprintf(fp, "     dentry_d_child: %lu\n", CU_OFFSET(dentry_d_child));
 		fprintf(fp, "      dentry_d_hash: %lu\n", CU_OFFSET(dentry_d_hash));
 		fprintf(fp, "hlist_bl_node_pprev: %lu\n", CU_OFFSET(hlist_bl_node_pprev));
+
+		pc->flags |= data_debug;
 	}
 
 	if ((*diskdump_flags & KDUMP_CMPRS_LOCAL) &&
