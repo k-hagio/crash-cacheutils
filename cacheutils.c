@@ -1467,6 +1467,8 @@ cacheutils_init(void)
 
 	CU_OFFSET_INIT(inode_i_size, "inode", "i_size");
 	CU_OFFSET_INIT(inode_i_mtime, "inode", "i_mtime");
+	if (CU_INVALID_MEMBER(inode_i_mtime))	/* 6.7 and later */
+		CU_OFFSET_INIT(inode_i_mtime, "inode", "__i_mtime");
 	CU_OFFSET_INIT(vfsmount_mnt_root, "vfsmount", "mnt_root");
 	CU_OFFSET_INIT(dentry_d_subdirs, "dentry", "d_subdirs");
 	CU_OFFSET_INIT(dentry_d_child, "dentry", "d_child");
@@ -1495,6 +1497,7 @@ cacheutils_init(void)
 		fprintf(fp, "\n");
 
 		fprintf(fp, "       inode_i_size: %lu\n", CU_OFFSET(inode_i_size));
+		fprintf(fp, "      inode_i_mtime: %lu\n", CU_OFFSET(inode_i_mtime));
 		fprintf(fp, "  vfsmount_mnt_root: %lu\n", CU_OFFSET(vfsmount_mnt_root));
 		fprintf(fp, "   dentry_d_subdirs: %lu\n", CU_OFFSET(dentry_d_subdirs));
 		fprintf(fp, "     dentry_d_child: %lu\n", CU_OFFSET(dentry_d_child));

@@ -244,7 +244,7 @@ Tested Kernels
 --------------
 
 - RHEL5 to RHEL9 (x86_64)
-- Linux 2.6.16 to 6.4 (x86_64)
+- Linux 2.6.16 to 6.7 (x86_64)
 - Linux 2.6.16 to 5.4 (i686)
 
 Related Links
