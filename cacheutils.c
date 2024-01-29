@@ -1,6 +1,6 @@
 /* cacheutils.c - crash extension module for dumping page caches
  *
- * Copyright (C) 2019-2023 NEC Corporation
+ * Copyright (C) 2019-2024 NEC Corporation
  *
  * Author: Kazuhito Hagio <k-hagio-ab@nec.com>
  *
@@ -30,8 +30,10 @@ struct cu_offset_table {
 	long dentry_d_child;
 	long dentry_d_hash;
 	long hlist_bl_node_pprev;
+	long dentry_d_sib;	/* 6.8 and later */
+	long dentry_d_children;	/* 6.8 and later */
 };
-static struct cu_offset_table cu_offset_table = { INVALID_OFFSET };
+static struct cu_offset_table cu_offset_table;
 
 static void cacheutils_init(void);
 static void cacheutils_fini(void);
@@ -282,13 +284,14 @@ get_subdirs_list(int *cntptr, ulong dentry)
 	struct list_data list_data, *ld;
 	ulong d_subdirs, child;
 
-	d_subdirs = dentry + CU_OFFSET(dentry_d_subdirs);
+	d_subdirs = dentry + (CU_INVALID_MEMBER(dentry_d_subdirs) ?
+			CU_OFFSET(dentry_d_children) : CU_OFFSET(dentry_d_subdirs));
 
 	if (!readmem(d_subdirs, KVADDR, &child, sizeof(ulong),
 	    "dentry.d_subdirs", RETURN_ON_ERROR))
 		return NULL;
 
-	if (d_subdirs == child)
+	if (!child || d_subdirs == child)
 		return NULL;
 
 	ld = &list_data;
@@ -296,7 +299,9 @@ get_subdirs_list(int *cntptr, ulong dentry)
 	ld->flags |= (LIST_ALLOCATE|RETURN_ON_LIST_ERROR);
 	ld->start = child;
 	ld->end = d_subdirs;
-	ld->list_head_offset = CU_OFFSET(dentry_d_child);
+	ld->list_head_offset = CU_INVALID_MEMBER(dentry_d_child) ?
+			CU_OFFSET(dentry_d_sib) : CU_OFFSET(dentry_d_child);
+
 	if (CRASHDEBUG(3))
 		ld->flags |= VERBOSE;
 
@@ -1465,15 +1470,23 @@ cacheutils_init(void)
 
 	register_extension(command_table);
 
+	BNEG(&cu_offset_table, sizeof(cu_offset_table));
+
 	CU_OFFSET_INIT(inode_i_size, "inode", "i_size");
 	CU_OFFSET_INIT(inode_i_mtime, "inode", "i_mtime");
 	if (CU_INVALID_MEMBER(inode_i_mtime))	/* 6.7 and later */
 		CU_OFFSET_INIT(inode_i_mtime, "inode", "__i_mtime");
 	CU_OFFSET_INIT(vfsmount_mnt_root, "vfsmount", "mnt_root");
-	CU_OFFSET_INIT(dentry_d_subdirs, "dentry", "d_subdirs");
-	CU_OFFSET_INIT(dentry_d_child, "dentry", "d_child");
-	if (CU_INVALID_MEMBER(dentry_d_child))	/* RHEL7 and older */
-		CU_OFFSET_INIT(dentry_d_child, "dentry", "d_u");
+	CU_OFFSET_INIT(dentry_d_children, "dentry", "d_children"); /* 6.8 and later */
+	if (CU_INVALID_MEMBER(dentry_d_children))
+		CU_OFFSET_INIT(dentry_d_subdirs, "dentry", "d_subdirs");
+	CU_OFFSET_INIT(dentry_d_sib, "dentry", "d_sib"); /* 6.8 and later */
+	if (CU_INVALID_MEMBER(dentry_d_sib)) {
+		CU_OFFSET_INIT(dentry_d_child, "dentry", "d_child");
+		/* RHEL8 and later also have d_u, so only when no d_child */
+		if (CU_INVALID_MEMBER(dentry_d_child))	/* RHEL7 and older */
+			CU_OFFSET_INIT(dentry_d_child, "dentry", "d_u");
+	}
 	CU_OFFSET_INIT(dentry_d_hash, "dentry", "d_hash");
 	CU_OFFSET_INIT(hlist_bl_node_pprev, "hlist_bl_node", "pprev");
 	if (CU_INVALID_MEMBER(hlist_bl_node_pprev)) /* 2.6.37 and older */
@@ -1496,13 +1509,15 @@ cacheutils_init(void)
 		fprintf(fp, " %s", (env_flags & TIMESPEC64) ? "TIMESPEC64" : "TIMESPEC");
 		fprintf(fp, "\n");
 
-		fprintf(fp, "       inode_i_size: %lu\n", CU_OFFSET(inode_i_size));
-		fprintf(fp, "      inode_i_mtime: %lu\n", CU_OFFSET(inode_i_mtime));
-		fprintf(fp, "  vfsmount_mnt_root: %lu\n", CU_OFFSET(vfsmount_mnt_root));
-		fprintf(fp, "   dentry_d_subdirs: %lu\n", CU_OFFSET(dentry_d_subdirs));
-		fprintf(fp, "     dentry_d_child: %lu\n", CU_OFFSET(dentry_d_child));
-		fprintf(fp, "      dentry_d_hash: %lu\n", CU_OFFSET(dentry_d_hash));
-		fprintf(fp, "hlist_bl_node_pprev: %lu\n", CU_OFFSET(hlist_bl_node_pprev));
+		fprintf(fp, "       inode_i_size: %ld\n", CU_OFFSET(inode_i_size));
+		fprintf(fp, "      inode_i_mtime: %ld\n", CU_OFFSET(inode_i_mtime));
+		fprintf(fp, "  vfsmount_mnt_root: %ld\n", CU_OFFSET(vfsmount_mnt_root));
+		fprintf(fp, "      dentry_d_hash: %ld\n", CU_OFFSET(dentry_d_hash));
+		fprintf(fp, "       dentry_d_sib: %ld\n", CU_OFFSET(dentry_d_sib));
+		fprintf(fp, "  dentry_d_children: %ld\n", CU_OFFSET(dentry_d_children));
+		fprintf(fp, "     dentry_d_child: %ld\n", CU_OFFSET(dentry_d_child));
+		fprintf(fp, "   dentry_d_subdirs: %ld\n", CU_OFFSET(dentry_d_subdirs));
+		fprintf(fp, "hlist_bl_node_pprev: %ld\n", CU_OFFSET(hlist_bl_node_pprev));
 
 		pc->flags |= data_debug;
 	}
