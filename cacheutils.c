@@ -1224,6 +1224,33 @@ NULL
 };
 
 static void
+print_debug_data(void)
+{
+	ulonglong data_debug = pc->flags & DATADEBUG;
+	pc->flags &= ~DATADEBUG;
+
+	fprintf(fp, "          env_flags: 0x%x", env_flags);
+	fprintf(fp, " %s", (env_flags & XARRAY) ? "XARRAY" : "RADIX_TREE");
+	if (CU_VALID_MEMBER(inode_i_mtime))
+		fprintf(fp, " %s", (env_flags & TIMESPEC64) ? "TIMESPEC64" : "TIMESPEC");
+	fprintf(fp, "\n");
+
+	fprintf(fp, "       inode_i_size: %ld\n", CU_OFFSET(inode_i_size));
+	fprintf(fp, "      inode_i_mtime: %ld\n", CU_OFFSET(inode_i_mtime));
+	fprintf(fp, "  inode_i_mtime_sec: %ld\n", CU_OFFSET(inode_i_mtime_sec));
+	fprintf(fp, " inode_i_mtime_nsec: %ld\n", CU_OFFSET(inode_i_mtime_nsec));
+	fprintf(fp, "  vfsmount_mnt_root: %ld\n", CU_OFFSET(vfsmount_mnt_root));
+	fprintf(fp, "      dentry_d_hash: %ld\n", CU_OFFSET(dentry_d_hash));
+	fprintf(fp, "       dentry_d_sib: %ld\n", CU_OFFSET(dentry_d_sib));
+	fprintf(fp, "  dentry_d_children: %ld\n", CU_OFFSET(dentry_d_children));
+	fprintf(fp, "     dentry_d_child: %ld\n", CU_OFFSET(dentry_d_child));
+	fprintf(fp, "   dentry_d_subdirs: %ld\n", CU_OFFSET(dentry_d_subdirs));
+	fprintf(fp, "hlist_bl_node_pprev: %ld\n", CU_OFFSET(hlist_bl_node_pprev));
+
+	pc->flags |= data_debug;
+}
+
+static void
 cmd_cls(void)
 {
 	int c;
@@ -1232,11 +1259,14 @@ cmd_cls(void)
 	flags = SHOW_INFO;
 	tc = NULL;
 
-	while ((c = getopt(argcnt, args, "adln:RtU")) != EOF) {
+	while ((c = getopt(argcnt, args, "aDdln:RtU")) != EOF) {
 		switch(c) {
 		case 'a':
 			flags |= SHOW_INFO_NEG_DENTS;
 			break;
+		case 'D':
+			print_debug_data();
+			return;
 		case 'd':
 			flags |= SHOW_INFO_DIRS;
 			break;
@@ -1515,30 +1545,8 @@ cacheutils_init(void)
 	    STREQ(MEMBER_TYPE_NAME("address_space", "i_pages"), "xarray"))
 		env_flags |= XARRAY;
 
-	if (CRASHDEBUG(1)) {
-		ulonglong data_debug = pc->flags & DATADEBUG;
-		pc->flags &= ~DATADEBUG;
-
-		fprintf(fp, "          env_flags: 0x%x", env_flags);
-		fprintf(fp, " %s", (env_flags & XARRAY) ? "XARRAY" : "RADIX_TREE");
-		if (CU_VALID_MEMBER(inode_i_mtime))
-			fprintf(fp, " %s", (env_flags & TIMESPEC64) ? "TIMESPEC64" : "TIMESPEC");
-		fprintf(fp, "\n");
-
-		fprintf(fp, "       inode_i_size: %ld\n", CU_OFFSET(inode_i_size));
-		fprintf(fp, "      inode_i_mtime: %ld\n", CU_OFFSET(inode_i_mtime));
-		fprintf(fp, "  inode_i_mtime_sec: %ld\n", CU_OFFSET(inode_i_mtime_sec));
-		fprintf(fp, " inode_i_mtime_nsec: %ld\n", CU_OFFSET(inode_i_mtime_nsec));
-		fprintf(fp, "  vfsmount_mnt_root: %ld\n", CU_OFFSET(vfsmount_mnt_root));
-		fprintf(fp, "      dentry_d_hash: %ld\n", CU_OFFSET(dentry_d_hash));
-		fprintf(fp, "       dentry_d_sib: %ld\n", CU_OFFSET(dentry_d_sib));
-		fprintf(fp, "  dentry_d_children: %ld\n", CU_OFFSET(dentry_d_children));
-		fprintf(fp, "     dentry_d_child: %ld\n", CU_OFFSET(dentry_d_child));
-		fprintf(fp, "   dentry_d_subdirs: %ld\n", CU_OFFSET(dentry_d_subdirs));
-		fprintf(fp, "hlist_bl_node_pprev: %ld\n", CU_OFFSET(hlist_bl_node_pprev));
-
-		pc->flags |= data_debug;
-	}
+	if (CRASHDEBUG(1))
+		print_debug_data();
 
 	if ((*diskdump_flags & KDUMP_CMPRS_LOCAL) &&
 	    ((dump_level = get_dump_level()) >= 0) &&
