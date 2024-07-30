@@ -17,6 +17,7 @@
 
 #include "defs.h"
 
+#define CU_VALID_MEMBER(X)	(cu_offset_table.X >= 0)
 #define CU_INVALID_MEMBER(X)	(cu_offset_table.X == INVALID_OFFSET)
 #define CU_OFFSET_INIT(X, Y, Z)	(cu_offset_table.X = MEMBER_OFFSET(Y, Z))
 #define CU_OFFSET(X)	(OFFSET_verify(cu_offset_table.X, \
@@ -25,6 +26,8 @@
 struct cu_offset_table {
 	long inode_i_size;
 	long inode_i_mtime;
+	long inode_i_mtime_sec;	 /* 6.11 and later */
+	long inode_i_mtime_nsec; /* 6.11 and later */
 	long vfsmount_mnt_root;
 	long dentry_d_subdirs;
 	long dentry_d_child;
@@ -260,7 +263,12 @@ get_inode_info(ulong inode, uint *i_mode, ulong *i_mapping,
 		 * There are some dirty assumptions and kludges here
 		 * for some reason I can't explain :)
 		 */
-		if (env_flags & TIMESPEC64) {
+		if (CU_VALID_MEMBER(inode_i_mtime_sec)) {
+			/* time64_t: long long */
+			i_mtime->tv_sec = (long long)ULONGLONG(inode_buf + CU_OFFSET(inode_i_mtime_sec));
+			/* u32: unsigned int */
+			i_mtime->tv_nsec = (long)UINT(inode_buf + CU_OFFSET(inode_i_mtime_nsec));
+		} else if (env_flags & TIMESPEC64) {
 			i_mtime->tv_sec = (long)ULONGLONG(inode_buf
 						+ CU_OFFSET(inode_i_mtime));
 			i_mtime->tv_nsec = LONG(inode_buf
@@ -1473,9 +1481,20 @@ cacheutils_init(void)
 	BNEG(&cu_offset_table, sizeof(cu_offset_table));
 
 	CU_OFFSET_INIT(inode_i_size, "inode", "i_size");
-	CU_OFFSET_INIT(inode_i_mtime, "inode", "i_mtime");
-	if (CU_INVALID_MEMBER(inode_i_mtime))	/* 6.7 and later */
+	/* 6.11 and later: 3aa63a569c64e */
+	CU_OFFSET_INIT(inode_i_mtime_sec, "inode", "i_mtime_sec");
+	CU_OFFSET_INIT(inode_i_mtime_nsec, "inode", "i_mtime_nsec");
+	if (CU_INVALID_MEMBER(inode_i_mtime_sec)) {
+		/* 6.7 and later: 12cd440236516 */
 		CU_OFFSET_INIT(inode_i_mtime, "inode", "__i_mtime");
+		if (CU_INVALID_MEMBER(inode_i_mtime)) {
+			CU_OFFSET_INIT(inode_i_mtime, "inode", "i_mtime");
+			/* 4.18 and later: 95582b0083883 */
+			if (STREQ(MEMBER_TYPE_NAME("inode", "i_mtime"), "timespec64"))
+				env_flags |= TIMESPEC64;
+		} else
+			env_flags |= TIMESPEC64;
+	}
 	CU_OFFSET_INIT(vfsmount_mnt_root, "vfsmount", "mnt_root");
 	CU_OFFSET_INIT(dentry_d_children, "dentry", "d_children"); /* 6.8 and later */
 	if (CU_INVALID_MEMBER(dentry_d_children))
@@ -1496,21 +1515,20 @@ cacheutils_init(void)
 	    STREQ(MEMBER_TYPE_NAME("address_space", "i_pages"), "xarray"))
 		env_flags |= XARRAY;
 
-	if (MEMBER_EXISTS("inode", "i_mtime") &&
-	    STREQ(MEMBER_TYPE_NAME("inode", "i_mtime"), "timespec64"))
-		env_flags |= TIMESPEC64;
-
 	if (CRASHDEBUG(1)) {
 		ulonglong data_debug = pc->flags & DATADEBUG;
 		pc->flags &= ~DATADEBUG;
 
 		fprintf(fp, "          env_flags: 0x%x", env_flags);
 		fprintf(fp, " %s", (env_flags & XARRAY) ? "XARRAY" : "RADIX_TREE");
-		fprintf(fp, " %s", (env_flags & TIMESPEC64) ? "TIMESPEC64" : "TIMESPEC");
+		if (CU_VALID_MEMBER(inode_i_mtime))
+			fprintf(fp, " %s", (env_flags & TIMESPEC64) ? "TIMESPEC64" : "TIMESPEC");
 		fprintf(fp, "\n");
 
 		fprintf(fp, "       inode_i_size: %ld\n", CU_OFFSET(inode_i_size));
 		fprintf(fp, "      inode_i_mtime: %ld\n", CU_OFFSET(inode_i_mtime));
+		fprintf(fp, "  inode_i_mtime_sec: %ld\n", CU_OFFSET(inode_i_mtime_sec));
+		fprintf(fp, " inode_i_mtime_nsec: %ld\n", CU_OFFSET(inode_i_mtime_nsec));
 		fprintf(fp, "  vfsmount_mnt_root: %ld\n", CU_OFFSET(vfsmount_mnt_root));
 		fprintf(fp, "      dentry_d_hash: %ld\n", CU_OFFSET(dentry_d_hash));
 		fprintf(fp, "       dentry_d_sib: %ld\n", CU_OFFSET(dentry_d_sib));
