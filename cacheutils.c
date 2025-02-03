@@ -28,6 +28,7 @@ struct cu_offset_table {
 	long inode_i_mtime;
 	long inode_i_mtime_sec;	 /* 6.11 and later */
 	long inode_i_mtime_nsec; /* 6.11 and later */
+	long inode_i_link;	/* 4.2 and later */
 	long vfsmount_mnt_root;
 	long dentry_d_subdirs;
 	long dentry_d_child;
@@ -320,9 +321,10 @@ get_subdirs_list(int *cntptr, ulong dentry)
 }
 
 static char *
-get_type_indicator(uint i_mode)
+get_type_indicator(uint i_mode, ulong inode)
 {
 	static char c[2] = {'\0', '\0'};
+	static char link[PATH_MAX] = {' ', '-', '>', ' '};
 
 	if (S_ISREG(i_mode)) {
 		if (i_mode & (S_IXUSR|S_IXGRP|S_IXOTH))
@@ -331,9 +333,15 @@ get_type_indicator(uint i_mode)
 			*c = '\0';
 	} else if (S_ISDIR(i_mode))
 		*c = '/';
-	else if (S_ISLNK(i_mode))
+	else if (S_ISLNK(i_mode)) {
+		ulong i_link;
+		if ((flags & SHOW_INFO_LONG) && CU_VALID_MEMBER(inode_i_link) &&
+		    readmem(inode + CU_OFFSET(inode_i_link), KVADDR, &i_link,
+				sizeof(ulong), "inode.i_link", RETURN_ON_ERROR) &&
+		    i_link && read_string(i_link, link+4, PATH_MAX-4))
+			return link;
 		*c = '@';
-	else if (S_ISFIFO(i_mode))
+	} else if (S_ISFIFO(i_mode))
 		*c = '|';
 	else if (S_ISSOCK(i_mode))
 		*c = '=';
@@ -475,7 +483,7 @@ show_subdirs_info(ulong dentry, char *src)
 				fprintf(fp, dentry_lfmt, p->dentry, p->inode,
 					p->nrpages, pct, p->i_mode, p->i_size,
 					get_strtime(&p->i_mtime), p->name,
-					get_type_indicator(p->i_mode));
+					get_type_indicator(p->i_mode, p->inode));
 				if (CRASHDEBUG(1))
 					fprintf(fp,
 				    "  i_mapping:%-16lx i_mtime:%ld.%09ld\n",
@@ -484,7 +492,7 @@ show_subdirs_info(ulong dentry, char *src)
 			} else {
 				fprintf(fp, dentry_fmt, p->dentry, p->inode,
 					p->nrpages, pct, p->name,
-					get_type_indicator(p->i_mode));
+					get_type_indicator(p->i_mode, p->inode));
 				if (CRASHDEBUG(1))
 					fprintf(fp, "  i_mapping:%-16lx\n",
 						p->i_mapping);
@@ -1015,7 +1023,7 @@ do_command(char *src, char *dst)
 				"%", "MODE", "SIZE", "MTIME", "PATH");
 			fprintf(fp, dentry_lfmt, dentry, inode, nrpages,
 				pct, i_mode, i_size, get_strtime(&i_mtime),
-				name, get_type_indicator(i_mode));
+				name, get_type_indicator(i_mode, inode));
 			if (CRASHDEBUG(1))
 				fprintf(fp,
 				    "  i_mapping:%-16lx i_mtime:%ld.%09ld\n",
@@ -1025,7 +1033,7 @@ do_command(char *src, char *dst)
 			fprintf(fp, header_fmt, "DENTRY", "INODE", "NRPAGES",
 				"%", "PATH");
 			fprintf(fp, dentry_fmt, dentry, inode, nrpages,
-				pct, name, get_type_indicator(i_mode));
+				pct, name, get_type_indicator(i_mode, inode));
 			if (CRASHDEBUG(1))
 				fprintf(fp, "  i_mapping:%-16lx\n", i_mapping);
 		}
@@ -1239,6 +1247,7 @@ print_debug_data(void)
 	fprintf(fp, "      inode_i_mtime: %ld\n", CU_OFFSET(inode_i_mtime));
 	fprintf(fp, "  inode_i_mtime_sec: %ld\n", CU_OFFSET(inode_i_mtime_sec));
 	fprintf(fp, " inode_i_mtime_nsec: %ld\n", CU_OFFSET(inode_i_mtime_nsec));
+	fprintf(fp, "       inode_i_link: %ld\n", CU_OFFSET(inode_i_link));
 	fprintf(fp, "  vfsmount_mnt_root: %ld\n", CU_OFFSET(vfsmount_mnt_root));
 	fprintf(fp, "      dentry_d_hash: %ld\n", CU_OFFSET(dentry_d_hash));
 	fprintf(fp, "       dentry_d_sib: %ld\n", CU_OFFSET(dentry_d_sib));
@@ -1525,6 +1534,7 @@ cacheutils_init(void)
 		} else
 			env_flags |= TIMESPEC64;
 	}
+	CU_OFFSET_INIT(inode_i_link, "inode", "i_link"); /* 4.2 and later: 61ba64fc0768 */
 	CU_OFFSET_INIT(vfsmount_mnt_root, "vfsmount", "mnt_root");
 	CU_OFFSET_INIT(dentry_d_children, "dentry", "d_children"); /* 6.8 and later */
 	if (CU_INVALID_MEMBER(dentry_d_children))
