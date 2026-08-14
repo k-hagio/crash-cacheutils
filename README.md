@@ -243,8 +243,8 @@ EXAMPLE
 Tested Kernels
 --------------
 
-- RHEL5 to RHEL9 (x86_64)
-- Linux 2.6.16 to 6.13 (x86_64)
+- RHEL5 to RHEL10 (x86_64)
+- Linux 2.6.16 to 7.2 (x86_64)
 - Linux 2.6.16 to 5.4 (i686)
 
 Related Links
